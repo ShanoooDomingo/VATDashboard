@@ -1,4 +1,4 @@
-﻿# VAT Compliance Purchase Dashboard
+# VAT Compliance Purchase Dashboard
 
 This folder is the modular version of the former single-file dashboard.
 
@@ -8,7 +8,14 @@ Keep this structure together when replacing the old GitHub HTML file:
 
 ```text
 index.html
-styles.css`r`napp.js`r`nsupabase-config.js`r`nsupabase-config.example.js`r`nsupabase-sync.js
+assets/
+  css/
+    styles.css
+  js/
+    app.js
+    supabase-config.js
+    supabase-config.example.js
+    supabase-sync.js
 ```
 
 Open `index.html` as the replacement page. The UI, dashboard logic, import/export behavior, local storage, and Supabase sync are loaded from the files under `assets/`.
@@ -18,12 +25,12 @@ Open `index.html` as the replacement page. The UI, dashboard logic, import/expor
 The current Supabase browser config is in:
 
 ```text
-supabase-config.js
+assets/js/supabase-config.js
 ```
 
 Only use a Supabase publishable key or legacy anon key in this browser file. Do not place a Supabase secret key, service role key, database password, or direct database connection string in any browser-loaded file.
 
-For static hosting, GitHub Secrets can keep these values out of the committed repository, but the deployed browser app still needs a generated `supabase-config.js` file to connect.
+For static hosting, GitHub Secrets can keep these values out of the committed repository, but the deployed browser app still needs a generated `assets/js/supabase-config.js` file to connect.
 
 Recommended GitHub secret names:
 
@@ -44,4 +51,3 @@ window.VAT_DASHBOARD_SUPABASE_CONFIG={
 ```
 
 If you want the Supabase values hidden from browser users, the dashboard needs a backend or serverless proxy. A static HTML/JS app cannot keep runtime Supabase browser settings private from someone inspecting the page or network requests.
-

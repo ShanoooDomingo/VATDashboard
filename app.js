@@ -51,6 +51,24 @@ function isStrictMMDDYYYY(value){
   const d=new Date(yyyy,mm-1,dd);
   return d.getFullYear()===yyyy&&d.getMonth()===(mm-1)&&d.getDate()===dd;
 }
+function normalizeImportDate(value){
+  if(value instanceof Date&&!Number.isNaN(value.getTime())){
+    const mm=String(value.getMonth()+1).padStart(2,'0');
+    const dd=String(value.getDate()).padStart(2,'0');
+    return `${mm}/${dd}/${value.getFullYear()}`;
+  }
+  const raw=String(value??'').trim();
+  if(!raw)return '';
+  if(isStrictMMDDYYYY(raw))return raw;
+  const m=raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})$/);
+  if(!m)return '';
+  const mm=Number(m[1]),dd=Number(m[2]);
+  let yyyy=Number(m[3]);
+  if(m[3].length===2)yyyy=yyyy>=50?1900+yyyy:2000+yyyy;
+  const d=new Date(yyyy,mm-1,dd);
+  if(d.getFullYear()!==yyyy||d.getMonth()!==mm-1||d.getDate()!==dd)return '';
+  return `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}/${yyyy}`;
+}
 function requireMMDDYYYY(value,label='Date'){
   const raw=String(value??'').trim();
   if(isStrictMMDDYYYY(raw))return raw;
@@ -320,7 +338,8 @@ function importRows(rows,type,fileInput,fileName){
       const cv=pick(row,'cv_no','cv','cv_number','voucher_no','check_voucher');
       const accountingTitle=pick(row,'accounting_title','accounting_titles','account_title','accounting','gl_account','expense_account');
       const bankAccount=pick(row,'bank_account','bank','cash_bank_account','disbursement_bank');
-      const date=pick(row,'date','payment_date','document_date');
+      const rawDate=pick(row,'date','payment_date','document_date');
+      const date=normalizeImportDate(rawDate);
       const rawVatCategory=pick(row,'vat_category','vat_category_code','vat_code','tax_code');
       const vatCategory=normalizeVATCategory(rawVatCategory);
       const rawAtcCode=pick(row,'atc_code','atc','withholding_atc','ewt_atc');
@@ -328,8 +347,8 @@ function importRows(rows,type,fileInput,fileName){
       let bad=false;
       if(!voucherName){addImportIssue(issues,xlsxRowNumber,'voucher_name','Missing voucher name or supplier name.',row);bad=true}
       if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
-      if(!date){addImportIssue(issues,xlsxRowNumber,'date','Missing date. Required format is MM/DD/YYYY, for example 04/05/2026.',row);bad=true}
-      else if(!isStrictMMDDYYYY(date)){addImportIssue(issues,xlsxRowNumber,'date',`Invalid date "${date}". Required format is MM/DD/YYYY, for example 04/05/2026.`,row);bad=true}
+      if(!rawDate){addImportIssue(issues,xlsxRowNumber,'date','Missing date. Required format is MM/DD/YYYY, for example 04/05/2026.',row);bad=true}
+      else if(!date){addImportIssue(issues,xlsxRowNumber,'date',`Invalid date "${rawDate}". Required format is MM/DD/YYYY, for example 04/05/2026.`,row);bad=true}
       if(!accountingTitle){addImportIssue(issues,xlsxRowNumber,'accounting_title','Missing accounting title.',row);bad=true}
       if(!bankAccount){addImportIssue(issues,xlsxRowNumber,'bank_account','Missing bank account.',row);bad=true}
       if(rawVatCategory&&!vatCategory){addImportIssue(issues,xlsxRowNumber,'vat_category',`Unknown VAT Category "${rawVatCategory}". Add it to VAT Categories master or correct the code.`,row);bad=true}
