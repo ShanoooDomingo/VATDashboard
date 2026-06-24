@@ -1,0 +1,1916 @@
+const TX_KEY='vatPurchaseVoucherVerificationTxCleanV1';
+const VAT_LEDGER_KEY='vatPurchaseVatLedgerCleanV1';
+const EWT_LEDGER_KEY='vatPurchaseEwtLedgerCleanV1';
+const SUPPLIER_MASTER_KEY='vatPurchaseSupplierMasterV1';
+const ATC_MASTER_KEY='vatPurchaseAtcMasterDatabaseOnlyV1';
+const VAT_CATEGORIES_KEY='vatPurchaseVatCategoriesMasterV1';
+const COMPANY_PROFILE={tin:'008737954',filingType:'P',registeredName:'LOCANDSTOR 247 INC',lastName:'',firstName:'',middleName:'',tradeName:'LOCSTOR 247 INC',address:'54 E RODRIGUEZ JR AVE BRGY BAGONG ILOG',cityZip:'PASIG CITY NCR 1604',branchCode:'043',taxRateCode:'12'};
+const demoTransactions=[];
+const demoVatLedger=[];
+const demoEwtLedger=[];
+const demoAtcMaster=[];
+
+const demoSupplierMaster=[
+  {tin:'123-456-789-000',registeredName:'Supplier A Corporation',lastName:'',firstName:'',middleName:'',address:'100 Ayala Avenue',city:'Makati City',zip:'1226'},
+  {tin:'234-567-890-000',registeredName:'Supplier B Services',lastName:'',firstName:'',middleName:'',address:'12 Shaw Boulevard',city:'Mandaluyong City',zip:'1550'},
+  {tin:'345-678-901-000',registeredName:'Supplier C Trading',lastName:'',firstName:'',middleName:'',address:'88 Quezon Avenue',city:'Quezon City',zip:'1100'},
+  {tin:'456-789-012-000',registeredName:'',lastName:'Dela Cruz',firstName:'Juan',middleName:'Santos',address:'45 Mabini Street',city:'Manila',zip:'1000'},
+  {tin:'567-890-123-000',registeredName:'Supplier Y Inc.',lastName:'',firstName:'',middleName:'',address:'9 Rizal Drive',city:'Taguig City',zip:'1634'}
+];
+let activeTab='summary';
+let activeMasterSub='vatCategories';
+let activeMonth='all';
+let activePurchaseBreakdown=null;
+let workSort={key:'date',dir:'asc'};
+let summaryViewMode='count';
+let activeSummaryStatus='';
+let activeBirReport='slpExcel';
+let focusedCV=null;
+let pendingScrollCV=null;
+const BALANCE_ALLOWANCE=0.51;
+const openSummary=new Set();
+let activeSummaryReview=null;
+const openCVs=new Set();
+const MONTH_NAMES=[['Jan','january','jan'],['Feb','february','feb'],['Mar','march','mar'],['Apr','april','apr'],['May','may'],['Jun','june','jun'],['Jul','july','jul'],['Aug','august','aug'],['Sep','september','sept','sep'],['Oct','october','oct'],['Nov','november','nov'],['Dec','december','dec']];
+function makeId(prefix='id'){return prefix+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
+function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function attr(v){return esc(v)}
+function parseMoney(value){let raw=String(value??'').trim();if(!raw||raw==='-'||raw==='--'||raw.toLowerCase()==='n/a')return 0;let negative=false;if(/^\(.*\)$/.test(raw)){negative=true;raw=raw.slice(1,-1)}raw=raw.replace(/[₱,\s]/g,'');const parsed=parseFloat(raw);if(!Number.isFinite(parsed))return 0;return negative?-parsed:parsed}
+function fmt(n){return Number(n||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function peso(n){const value=Number(n||0);const negative=value<0;return `<span class="peso"><span class="peso-paren">${negative?'(':''}</span><span class="peso-sign">₱</span><span class="peso-num">${fmt(Math.abs(value))}</span><span class="peso-paren">${negative?')':''}</span></span>`}
+function pesoText(n){const value=Number(n||0);const body='₱ '+fmt(Math.abs(value));return value<0?'('+body+')':body}
+function money(n){return pesoText(n)}
+function getValue(id){const el=document.getElementById(id);return el?el.value.trim():''}
+function setValue(id,value){const el=document.getElementById(id);if(el)el.value=value??''}
+function readMoney(id){return parseMoney(getValue(id))}
+function isStrictMMDDYYYY(value){
+  const raw=String(value??'').trim();
+  const m=raw.match(/^(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])\/(19\d{2}|20\d{2})$/);
+  if(!m)return false;
+  const mm=Number(m[1]),dd=Number(m[2]),yyyy=Number(m[3]);
+  const d=new Date(yyyy,mm-1,dd);
+  return d.getFullYear()===yyyy&&d.getMonth()===(mm-1)&&d.getDate()===dd;
+}
+function normalizeImportDate(value){
+  if(value instanceof Date&&!Number.isNaN(value.getTime())){
+    const mm=String(value.getMonth()+1).padStart(2,'0');
+    const dd=String(value.getDate()).padStart(2,'0');
+    return `${mm}/${dd}/${value.getFullYear()}`;
+  }
+  const raw=String(value??'').trim();
+  if(!raw)return '';
+  if(isStrictMMDDYYYY(raw))return raw;
+  const m=raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})$/);
+  if(!m)return '';
+  const mm=Number(m[1]),dd=Number(m[2]);
+  let yyyy=Number(m[3]);
+  if(m[3].length===2)yyyy=yyyy>=50?1900+yyyy:2000+yyyy;
+  const d=new Date(yyyy,mm-1,dd);
+  if(d.getFullYear()!==yyyy||d.getMonth()!==mm-1||d.getDate()!==dd)return '';
+  return `${String(mm).padStart(2,'0')}/${String(dd).padStart(2,'0')}/${yyyy}`;
+}
+function requireMMDDYYYY(value,label='Date'){
+  const raw=String(value??'').trim();
+  if(isStrictMMDDYYYY(raw))return raw;
+  showToast(`${label} must use MM/DD/YYYY format, for example 04/05/2026.`);
+  return '';
+}
+function dateSortNumber(value){
+  const raw=String(value??'').trim();
+  if(isStrictMMDDYYYY(raw)){
+    const [mm,dd,yyyy]=raw.split('/').map(Number);
+    return yyyy*10000+mm*100+dd;
+  }
+  return null;
+}
+function loadArray(key,fallback){try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(err){}return fallback}
+function saveAll(){try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES))}catch(err){}}
+function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';return 'unreviewed'}
+function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';return 'Unreviewed'}
+function normalizeATC(value){const raw=String(value??'').trim().toUpperCase();if(!raw||raw==='-'||raw==='--'||raw==='N/A'||raw==='NONE')return '';const compact=raw.replace(/[^A-Z0-9]/g,'');const match=compact.match(/^([A-Z]{2})(\d{3})$/);return match?`${match[1]} ${match[2]}`:''}
+function isValidATC(value){const raw=String(value??'').trim();return !raw||Boolean(normalizeATC(raw))}
+function atcText(value){return normalizeATC(value)||'--'}
+function parseRate(value){
+  const raw=String(value??'').trim();
+  if(!raw||raw==='-'||raw==='--'||raw.toLowerCase()==='n/a')return null;
+  const hasPercent=raw.includes('%');
+  const parsed=parseFloat(raw.replace('%','').replace(/,/g,''));
+  if(!Number.isFinite(parsed))return null;
+  // Master rates are stored as percentage points for display/export, e.g. 5.00 means 5%.
+  // Accept common upload formats: 5, 5%, or 0.05 all normalize to 5.
+  if(!hasPercent&&parsed>0&&parsed<1)return parsed*100;
+  return parsed;
+}
+function normalizeAtcMaster(row){return{_id:row?._id||makeId('atc'),atcCode:normalizeATC(row?.atcCode??row?.atc_code??row?.atc??row?.code),rate:parseRate(row?.rate??row?.ewt_rate??row?.percentage??row?.tax_rate),description:String(row?.description??row?.nature??row?.income_payment??row?.payment_type??'').trim(),source:String(row?.source??row?.database_source??row?.reference??row?.basis??row?.legal_basis??'').trim(),status:String(row?.status??'active').trim().toLowerCase()||'active'}}
+function atcLookup(code){const normalized=normalizeATC(code);if(!normalized)return null;const source=(typeof atcMaster!=='undefined'&&Array.isArray(atcMaster)?atcMaster:demoAtcMaster||[]).map(normalizeAtcMaster);return source.find(a=>normalizeATC(a.atcCode)===normalized)||null}
+function atcRateForCode(code){const found=atcLookup(code);return found&&Number.isFinite(found.rate)?found.rate:null}
+function atcRateText(code){const rate=atcRateForCode(code);return rate===null?'--':rate.toFixed(2).replace(/\.00$/,'')+'%'}
+function ewtBaseAmount(t){return Number(t?.amount||0)}
+function expectedEwtAmount(t){const rate=atcRateForCode(t?.atcCode);if(rate===null)return 0;return ewtBaseAmount(t)*rate/100}
+function ewtExpectedDisplay(t){const rate=atcRateForCode(t?.atcCode);if(normalizeATC(t?.atcCode)&&rate===null)return `<span class="variance-bad">Rate missing</span><div class="mono">Upload ATC Master</div>`;const expected=expectedEwtAmount(t);const diff=Number(t.ewtAmount||0)-expected;return `<span class="${isBalanced(diff)?'variance-good':'variance-bad'}">${peso(expected)}</span><div class="mono">ATC ${esc(atcRateText(t.atcCode))}</div>`}
+function ewtRateMismatch(t){return false}
+const demoVatCategories=[
+  {code:'S',label:'Vatable services',kind:'VAT Registered',rate:12,status:'locked'},
+  {code:'G',label:'Vatable goods',kind:'VAT Registered',rate:12,status:'locked'},
+  {code:'I',label:'Vatable importation',kind:'VAT Registered',rate:12,status:'locked'},
+  {code:'CG',label:'Vatable capital goods',kind:'VAT Registered',rate:12,status:'locked'},
+  {code:'SNQ',label:'Non-VAT services',kind:'Non-VAT',rate:0,status:'locked'},
+  {code:'GNQ',label:'Non-VAT goods',kind:'Non-VAT',rate:0,status:'locked'}
+];
+function normalizeVatCodeRaw(value){return String(value??'').trim().toUpperCase().replace(/[^A-Z]/g,'')}
+function normalizeVatCategoryMaster(row){return{_id:row?._id||makeId('vatcat'),code:normalizeVatCodeRaw(row?.code??row?.vatCategory??row?.vat_category??row?.vat_category_code??row?.category),label:String(row?.label??row?.description??row?.desc??row?.meaning??'').trim(),kind:String(row?.kind??row?.vatType??row?.vat_type??row?.type??'VAT Registered').trim()||'VAT Registered',rate:parseRate(row?.rate??row?.vat_rate??row?.percentage)??0,status:String(row?.status??'active').trim().toLowerCase()||'active'}}
+function normalizeVATCategory(value){const raw=String(value??'').trim().toUpperCase().replace(/[^A-Z]/g,'');return VAT_CATEGORIES.some(c=>c.code===raw)?raw:''}
+function vatCategoryLookup(code){const normalized=normalizeVATCategory(code);return VAT_CATEGORIES.find(c=>c.code===normalized)||null}
+function vatCategoryText(code){const c=vatCategoryLookup(code);return c?`${c.code} - ${c.label}`:'--'}
+function vatRateForCategory(code){const c=vatCategoryLookup(code);return c?c.rate:null}
+function isVatableCategory(code){const rate=vatRateForCategory(code);return Number(rate||0)>0}
+function computeVATFromCategory(vatable,category){const rate=vatRateForCategory(category);if(rate===null)return 0;return Number(vatable||0)*rate/100}
+function taxableBaseFromAmount(amount,category){return isVatableCategory(category)?Number(amount||0):0}
+function nonTaxableBaseFromAmount(amount,category){return category&&!isVatableCategory(category)?Number(amount||0):0}
+function transactionAmount(t){return Number(t?.amount||0)||Number(t?.vatable||0)+Number(t?.nonVatable||0)}
+function deriveVatTypeFromCategory(category,vat){return Number(vat||0)>0?'VAT-reg':'Non-VAT'}
+function vatTypeText(type){return type==='VAT-reg'?'VAT Registered':'Not VAT Registered'}
+function inferVatCategory(raw,vat,nonVatable){const direct=normalizeVATCategory(raw?.vatCategory??raw?.vat_category??raw?.vat_category_code??raw?.vatCode??raw?.vat_code??raw?.tax_code);if(direct)return direct;if(Number(vat||0)>0)return 'S';if(Number(nonVatable||0)>0)return 'SNQ';return ''}
+function computeAmounts(raw){
+  const directAmount=parseMoney(raw.amount??raw.purchase_amount??raw.base_amount??raw.tax_base_amount??raw.vatable??raw.vatableAmount??raw.vatable_amount??raw.nonVatable??raw.nonVat??raw.non_vat??raw.non_vat_amount??raw.non_vatable_amount??raw.net??raw.net_amount);
+  const legacyVat=parseMoney(raw.vat??raw.vatAmount??raw.vat_amount);
+  const legacyGross=parseMoney(raw.gross??raw.gross_amount);
+  const vatCategory=inferVatCategory(raw,legacyVat,parseMoney(raw.nonVatable??raw.nonVat??raw.non_vat??raw.non_vat_amount??raw.non_vatable_amount));
+  let amount=directAmount;
+  if(amount===0&&legacyGross>0&&legacyVat>0) amount=legacyGross-legacyVat;
+  const vatable=taxableBaseFromAmount(amount,vatCategory);
+  const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
+  const vat=computeVATFromCategory(vatable,vatCategory);
+  let total=parseMoney(raw.total??raw.totalAmount??raw.total_amount??raw.gross??raw.gross_amount);
+  if(total===0) total=amount+vat;
+  return{amount,vatable,nonVatable,vat,total,vatCategory}
+}
+function normalizeTIN(value){return String(value??'').replace(/[^0-9]/g,'')}
+function formatTIN(value){const d=normalizeTIN(value);if(d.length===12)return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6,9)}-${d.slice(9)}`;return String(value??'').trim()}
+function personName(s){return [s.firstName,s.middleName,s.lastName].filter(Boolean).join(' ').trim()}
+function supplierDisplayName(s){return String(s?.registeredName||'').trim()||personName(s)||''}
+function normalizeSupplier(row){return{_id:row?._id||makeId('sup'),tin:formatTIN(row?.tin||row?.supplier_tin||row?.tin_no||row?.tax_identification_number),registeredName:String(row?.registeredName??row?.registered_name??row?.corporation_name??row?.registered_corporation_name??row?.company_name??row?.supplier_name??'').trim(),lastName:String(row?.lastName??row?.last_name??row?.registered_last_name??'').trim(),firstName:String(row?.firstName??row?.first_name??row?.registered_first_name??'').trim(),middleName:String(row?.middleName??row?.middle_name??row?.registered_middle_name??'').trim(),address:String(row?.address??row?.registeredAddress??row?.registered_address??row?.street_address??'').trim(),city:String(row?.city??row?.registered_city??'').trim(),zip:String(row?.zip??row?.zip_code??row?.registered_zip_code??row?.postal_code??'').trim()}}
+function findSupplierByTIN(tin){const needle=normalizeTIN(tin);if(!needle)return null;return supplierMaster.map(normalizeSupplier).find(s=>normalizeTIN(s.tin)===needle)||null}
+function applySupplierToTransaction(tx,s){if(!s)return tx;return normalizeTransaction({...tx,tin:s.tin,supplier:supplierDisplayName(s),registeredName:s.registeredName,lastName:s.lastName,firstName:s.firstName,middleName:s.middleName,address:s.address,city:s.city,zip:s.zip})}
+function normalizeTransaction(t){const a=computeAmounts(t||{});const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=expectedEwtAmount({amount:a.amount,atcCode});return{_id:t?._id||makeId('tx'),voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus:parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status),reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
+function normalizeLedger(row,type){return{_id:row?._id||makeId(type==='vat'?'vat':'ewt'),cv:String(row?.cv||row?.cv_no||row?.cv_number||'').trim(),supplier:String(row?.supplier||row?.supplier_name||row?.payee||row?.voucherName||row?.voucher_name||'').trim(),date:String(row?.date||row?.transaction_date||'').trim()||'--',amount:parseMoney(row?.amount??row?.balance??row?.ending_balance??(type==='vat'?row?.vat_amount??row?.input_vat:row?.ewt_amount??row?.withholding_tax)),account:String(row?.account||row?.ledger_account||'').trim(),ref:String(row?.ref||row?.reference||row?.gl_ref||'').trim(),type}}
+let VAT_CATEGORIES=loadArray(VAT_CATEGORIES_KEY,demoVatCategories).map(normalizeVatCategoryMaster);
+let atcMaster=loadArray(ATC_MASTER_KEY,demoAtcMaster).map(normalizeAtcMaster);
+let supplierMaster=loadArray(SUPPLIER_MASTER_KEY,demoSupplierMaster).map(normalizeSupplier);
+let transactions=loadArray(TX_KEY,demoTransactions).map(normalizeTransaction);
+let vatLedger=loadArray(VAT_LEDGER_KEY,demoVatLedger).map(r=>normalizeLedger(r,'vat'));
+let ewtLedger=loadArray(EWT_LEDGER_KEY,demoEwtLedger).map(r=>normalizeLedger(r,'ewt'));
+function monthInfo(month,year){const m=Math.max(1,Math.min(12,Number(month)||1));const mm=String(m).padStart(2,'0');const yr=String(year||'').trim();return{key:yr?`${yr}-${mm}`:`m${mm}`,label:`${MONTH_NAMES[m-1][0]}${yr?' '+yr:''}`,order:yr?Number(yr)*100+m:m}}
+function monthInfoFromDate(value){const raw=String(value??'').trim();if(!raw||raw==='--'||raw==='-'||raw.toLowerCase()==='n/a')return{key:'undated',label:'Undated',order:999999};let m=raw.match(/^\s*(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?/);if(m)return monthInfo(Number(m[2]),m[1]);m=raw.match(/^\s*(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/);if(m){const first=Number(m[1]),second=Number(m[2]);const month=first>12?second:first;let yr=m[3]||'';if(yr&&yr.length===2)yr='20'+yr;return monthInfo(month,yr)}const lower=raw.toLowerCase();const y=(raw.match(/\b(19\d{2}|20\d{2})\b/)||[])[1]||'';for(let i=0;i<MONTH_NAMES.length;i++){if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`).test(lower)))return monthInfo(i+1,y)}const parsed=new Date(raw);if(!Number.isNaN(parsed.getTime()))return monthInfo(parsed.getMonth()+1,String(parsed.getFullYear()));return{key:'undated',label:'Undated',order:999999}}
+function recordMonthKey(row){return monthInfoFromDate(row?.date).key}
+function recordMatchesActiveMonth(row){return activeMonth==='all'||recordMonthKey(row)===activeMonth}
+function visibleTransactionsForMonth(){return transactions.map(normalizeTransaction).filter(recordMatchesActiveMonth)}
+function visibleVatLedgerForMonth(){return vatLedger.map(r=>normalizeLedger(r,'vat')).filter(recordMatchesActiveMonth)}
+function visibleEwtLedgerForMonth(){return ewtLedger.map(r=>normalizeLedger(r,'ewt')).filter(recordMatchesActiveMonth)}
+function buildMonthBuckets(){const map=new Map();const add=row=>{const info=monthInfoFromDate(row?.date);if(!map.has(info.key))map.set(info.key,info)};transactions.forEach(add);vatLedger.forEach(add);ewtLedger.forEach(add);return[...map.values()].sort((a,b)=>a.order-b.order||a.label.localeCompare(b.label))}
+function monthCount(key){if(key==='all')return transactions.length;return transactions.filter(t=>recordMonthKey(t)===key).length}
+function setMonth(key){activeMonth=key;focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel').classList.remove('visible');document.getElementById('addPanel').classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
+function renderMonthTabs(){const el=document.getElementById('monthTabs');if(!el)return;if(activeTab==='masters'){el.innerHTML='';el.style.display='none';return}el.style.display='flex';const months=buildMonthBuckets();const keys=new Set(['all',...months.map(m=>m.key)]);if(!keys.has(activeMonth))activeMonth='all';let html=`<button class="month-btn ${activeMonth==='all'?'active':''}" onclick="setMonth('all')">All Months <span>${transactions.length} txns</span></button>`;months.forEach(m=>{html+=`<button class="month-btn ${activeMonth===m.key?'active':''}" onclick="setMonth('${attr(m.key)}')">${esc(m.label)} <span>${monthCount(m.key)} txns</span></button>`});el.innerHTML=html}
+function badge(type,label){return `<span class="badge badge-${type}">${esc(label)}</span>`}
+function vatBadge(type){return type==='VAT-reg'?badge('ok','VAT Registered'):badge('na','Not VAT Registered')}
+function statusBadge(status){if(status==='ok')return badge('ok','Compliant');if(status==='warn')return badge('warn','Without Invoice');if(status==='err')return badge('err','Non-Compliant');return badge('review','Unreviewed')}
+function isBalanced(n){return Math.abs(Number(n||0))<=BALANCE_ALLOWANCE}
+function amountClass(n){return isBalanced(n)?'variance-good':'variance-bad'}
+function varianceBadge(n){const value=Number(n||0);return `<span class="${amountClass(value)}">${peso(value)}</span>`}
+function compactList(values,empty='--'){const seen=[];values.forEach(v=>{const s=String(v??'').trim();if(s&&!seen.includes(s))seen.push(s)});if(!seen.length)return empty;if(seen.length===1)return seen[0];return `Mixed (${seen.length})`}
+function groupStatus(txns){const total=txns.length||1;const ok=txns.filter(t=>t.manualStatus==='ok').length;const warn=txns.filter(t=>t.manualStatus==='warn').length;const err=txns.filter(t=>t.manualStatus==='err').length;const unreviewed=txns.filter(t=>t.manualStatus==='unreviewed').length;const okPct=Math.round(ok/total*100);const warnPct=Math.round(warn/total*100);const errPct=Math.round(err/total*100);const reviewPct=Math.max(0,100-okPct-warnPct-errPct);let status='ok';if(err>0)status='err';else if(warn>0)status='warn';else if(unreviewed>0)status='unreviewed';return{ok,warn,err,unreviewed,okPct,warnPct,errPct,reviewPct,status}}
+function scoreBar(st){return `<div class="bar-wrap"><div class="bar-ok" style="width:${st.okPct}%"></div><div class="bar-warn" style="width:${st.warnPct}%"></div><div class="bar-err" style="width:${st.errPct}%"></div><div class="bar-review" style="width:${st.reviewPct}%"></div></div><div class="pct-row"><span class="pct-ok">${st.ok}</span><span class="pct-warn">${st.warn}</span><span class="pct-err">${st.err}</span><span class="pct-review">${st.unreviewed}</span></div>`}
+function sumTxns(txns){return txns.reduce((a,t)=>{a.amount+=transactionAmount(t);a.vatable+=t.vatable;a.nonVatable+=t.nonVatable;a.vat+=t.vat;a.total+=t.total;a.ewtAmount+=t.ewtAmount;return a},{amount:0,vatable:0,nonVatable:0,vat:0,total:0,ewtAmount:0})}
+function switchTab(tab){activeTab=tab;if(tab!=='working')focusedCV=null;if(tab!=='summary')activeSummaryReview=null;['summary','working','vat','ewt','bir','masters'].forEach(name=>{const sheetId=name==='working'?'workingSheet':name==='masters'?'mastersSheet':name==='bir'?'birSheet':name+'Sheet';const btnId=name==='working'?'tabWorkingBtn':name==='summary'?'tabSummaryBtn':name==='vat'?'tabVatBtn':name==='ewt'?'tabEwtBtn':name==='bir'?'tabBirBtn':'tabMastersBtn';document.getElementById(sheetId)?.classList.toggle('active',tab===name);document.getElementById(btnId)?.classList.toggle('active',tab===name)});document.getElementById('importPanel').classList.remove('visible');document.getElementById('addPanel').classList.remove('visible');if(tab!=='summary')closeSummaryReviewModal(true);updateActionButtons();renderAll()}
+function switchMasterSub(sub){activeMasterSub=sub;['vatCategories','atcRates','suppliers'].forEach(name=>{const paneId=name==='vatCategories'?'vatCategoriesPane':name==='atcRates'?'atcRatesPane':'suppliersPane';const btnId=name==='vatCategories'?'masterVatCategoriesBtn':name==='atcRates'?'masterAtcRatesBtn':'masterSuppliersBtn';document.getElementById(paneId)?.classList.toggle('active',sub===name);document.getElementById(btnId)?.classList.toggle('active',sub===name)});updateActionButtons();renderAll()}
+function updateActionButtons(){const canImport=['working','vat','ewt','masters'].includes(activeTab);document.getElementById('importBtn').style.display=canImport?'inline-flex':'none';document.getElementById('addBtn').style.display=activeTab==='working'?'inline-flex':'none';let label='Export Summary';if(activeTab==='working')label='Export Purchases';else if(activeTab==='vat')label='Export VAT Balances';else if(activeTab==='ewt')label='Export EWT Balances';else if(activeTab==='bir')label='Export BIR Index';else if(activeTab==='masters')label=activeMasterSub==='vatCategories'?'Export VAT Categories':activeMasterSub==='atcRates'?'Export ATC Master':'Export Supplier Master';document.getElementById('exportBtn').textContent=label}
+function toggleFullscreen(){const root=document.documentElement;if(!document.fullscreenElement&&root.requestFullscreen){root.requestFullscreen().then(()=>showToast('Full-screen view enabled.')).catch(()=>showToast('Open the HTML file in a browser to use full-screen mode.'))}else if(document.exitFullscreen){document.exitFullscreen().then(()=>showToast('Full-screen view exited.')).catch(()=>{})}else showToast('Open the HTML file in a browser to use full-screen mode.')}
+document.addEventListener('fullscreenchange',()=>{document.getElementById('fullscreenBtn').textContent=document.fullscreenElement?'Exit full screen':'Maximize view'});
+function toggleImport(){if(activeTab==='summary')switchTab('working');document.getElementById('importPanel').classList.toggle('visible');document.getElementById('addPanel').classList.remove('visible');let type='book';if(activeTab==='vat')type='vatLedger';else if(activeTab==='ewt')type='ewtLedger';else if(activeTab==='masters')type=activeMasterSub==='vatCategories'?'vatCategoryMaster':activeMasterSub==='atcRates'?'atcMaster':'supplierMaster';document.getElementById('importType').value=type;updateImportHelp()}
+function toggleAdd(){if(activeTab!=='working')switchTab('working');document.getElementById('addPanel').classList.toggle('visible');document.getElementById('importPanel').classList.remove('visible')}
+function activeMonthLabel(){if(activeMonth==='all')return 'All Months';const found=buildMonthBuckets().find(m=>m.key===activeMonth);return found?found.label:activeMonth}
+function clearLedgerUpload(type){
+  const isVat=type==='vat';
+  const label=isVat?'VAT Balances':'EWT Balances';
+  if(activeMonth==='all'){showToast('Select a specific month before removing '+label+'. All-month deletion is disabled.');return}
+  const rows=isVat?vatLedger:ewtLedger;
+  const toRemove=rows.filter(r=>recordMonthKey(r)===activeMonth);
+  if(!toRemove.length){showToast(label+' has no uploaded rows for '+activeMonthLabel()+'.');return}
+  const ok=confirm('Remove '+toRemove.length+' '+label+' row(s) for '+activeMonthLabel()+' only? Other months will remain.');
+  if(!ok)return;
+  if(isVat){vatLedger=vatLedger.filter(r=>recordMonthKey(r)!==activeMonth);document.getElementById('vatSearch').value='';document.getElementById('vatBalanceFilter').value=''}
+  else{ewtLedger=ewtLedger.filter(r=>recordMonthKey(r)!==activeMonth);document.getElementById('ewtSearch').value='';document.getElementById('ewtBalanceFilter').value=''}
+  saveAll();
+  renderAll();
+  showToast(label+' for '+activeMonthLabel()+' removed.');
+}
+
+function updateTaxPreview(prefix){const amount=readMoney(prefix+'_amount')||readMoney(prefix+'_vatable');const cat=normalizeVATCategory(getValue(prefix+'_vat_category'));const vatable=taxableBaseFromAmount(amount,cat);const nonVatable=nonTaxableBaseFromAmount(amount,cat);const vat=computeVATFromCategory(vatable,cat);setValue(prefix+'_vat',money(vat));setValue(prefix+'_vat_type',vatTypeText(deriveVatTypeFromCategory(cat,vat)));const atcCode=normalizeATC(getValue(prefix+'_atc_code'));setValue(prefix+'_ewt_amount',money(expectedEwtAmount({amount,atcCode}))) }
+function updateVatTypePreview(prefix){updateTaxPreview(prefix)}
+function updateImportHelp(){const type=document.getElementById('importType').value;let text='';if(type==='book')text='Purchase transaction import required columns per purchase line: voucher_name, cv_no, date, accounting_title, and bank_account. Date must be MM/DD/YYYY, for example 04/05/2026. One CV may contain multiple purchase lines with different Accounting Titles and Bank Accounts. Recommended: description, amount, total_amount, vat_category, atc_code, invoice_no, compliance, review_note.';else if(type==='vatLedger')text='VAT Balances import recommended columns: cv_no, voucher_name or supplier_name, date, vat_amount, ledger_account. Matching is by CV Number and amount.';else if(type==='ewtLedger')text='EWT Balances import recommended columns: cv_no, voucher_name or supplier_name, date, ewt_amount, ledger_account. Matching is by CV Number and amount.';else if(type==='vatCategoryMaster')text='VAT Categories import required columns: vat_category and rate. Recommended: description, vat_type. Example: S, Vatable services, VAT Registered, 12.';else if(type==='atcMaster')text='ATC Master import required columns: atc_code and rate. Recommended: description and source. Example: WC 160, 2, Service payment, 2307 reference table.';else text='Supplier Master import required column: tin. Recommended: registered_name, registered_last_name, registered_first_name, registered_middle_name, registered_address, city, zip_code.';document.getElementById('importHelp').textContent=text}
+let addSupplierLookupTimer=null;
+function applySupplierFields(prefix,s){if(!s)return;setValue(prefix+'_tin',s.tin);setValue(prefix+'_supplier',supplierDisplayName(s));if(document.getElementById(prefix+'_last'))setValue(prefix+'_last',s.lastName);if(document.getElementById(prefix+'_first'))setValue(prefix+'_first',s.firstName);if(document.getElementById(prefix+'_middle'))setValue(prefix+'_middle',s.middleName);if(document.getElementById(prefix+'_address'))setValue(prefix+'_address',s.address);if(document.getElementById(prefix+'_city'))setValue(prefix+'_city',s.city);if(document.getElementById(prefix+'_zip'))setValue(prefix+'_zip',s.zip)}
+function autoLookupSupplierForAdd(silent=true){const rawTin=getValue('f_tin');const digits=normalizeTIN(rawTin);if(!digits)return false;const s=findSupplierByTIN(rawTin);if(!s){if(!silent)showToast('No supplier found for this TIN in Supplier Master. Add it in Master Data → Supplier Master first.');return false}applySupplierFields('f',s);if(!silent)showToast('Supplier details auto-filled from Supplier Master.');return true}
+function queueSupplierLookupForAdd(){clearTimeout(addSupplierLookupTimer);addSupplierLookupTimer=setTimeout(()=>{if(normalizeTIN(getValue('f_tin')).length>=9)autoLookupSupplierForAdd(true)},350)}
+function addTransaction(){
+  const voucherName=getValue('f_voucher'), cv=getValue('f_cv');
+  if(!voucherName||!cv){showToast('Please fill in Voucher name and CV no.');return}
+  const amount=readMoney('f_amount');
+  const vatCategory=normalizeVATCategory(getValue('f_vat_category'));
+  const atcCode=normalizeATC(getValue('f_atc_code'));
+  if(getValue('f_atc_code')&&!atcCode){showToast('ATC Code must use the format WC 160 or WI 160.');return}
+  const vatable=taxableBaseFromAmount(amount,vatCategory);
+  const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
+  const vat=vatCategory?computeVATFromCategory(vatable,vatCategory):0;
+  let total=readMoney('f_total');
+  if(!total)total=amount+vat;
+  const status=parseVerification(getValue('f_status'));
+  let inv=getValue('f_inv'), supplier=getValue('f_supplier'), tin=getValue('f_tin');
+  const addMaster=tin?findSupplierByTIN(tin):null;
+  if(tin&&!addMaster)showToast('No supplier found for this TIN in Supplier Master. You can still save as draft or add the supplier master record later.');
+  if(addMaster){applySupplierFields('f',addMaster);supplier=getValue('f_supplier');tin=getValue('f_tin')}
+  if(status==='ok'&&(!inv||!supplier||!tin)){showToast('For Compliant, fill in Registered supplier, TIN, and invoice number.');return}
+  const date=requireMMDDYYYY(getValue('f_date'),'Manual transaction date');
+  if(!date)return;
+  const newRow=normalizeTransaction({_id:makeId('tx'),voucherName,supplier,tin,cv,inv,date,description:getValue('f_desc'),accountingTitle:getValue('f_accounting_title'),bankAccount:getValue('f_bank_account'),amount,vatable,nonVatable,vatCategory,total,atcCode,manualStatus:status,reviewNote:getValue('f_note'),lastReviewed:new Date().toISOString(),lastName:getValue('f_last'),firstName:getValue('f_first'),middleName:getValue('f_middle'),address:getValue('f_address'),city:getValue('f_city'),zip:getValue('f_zip')});
+  transactions.push(newRow);
+  ['f_voucher','f_supplier','f_tin','f_last','f_first','f_middle','f_address','f_city','f_zip','f_cv','f_inv','f_date','f_desc','f_accounting_title','f_bank_account','f_amount','f_total','f_atc_code','f_note'].forEach(id=>setValue(id,''));
+  setValue('f_vat_category','');setValue('f_status','unreviewed');updateTaxPreview('f');
+  activeTab='working';
+  activeMonth='all';
+  if(document.getElementById('workSearch'))document.getElementById('workSearch').value='';
+  if(document.getElementById('workStatus'))document.getElementById('workStatus').value='';
+  if(document.getElementById('varianceFilter'))document.getElementById('varianceFilter').value='';
+  openCVs.add(newRow.cv||'(No CV Number)');
+  saveAll();renderAll();
+  document.getElementById('addPanel').classList.add('visible');
+  showToast('Purchase transaction added. It is now visible under All Months and the CV is expanded.');
+}
+function addFiveTestTransactions(){
+  const baseDate=new Date();
+  const samples=[
+    {voucherName:'Manual Test Voucher 1',cv:'TEST-CV-001',description:'Office supplies',amount:1000,vatCategory:'G',atcCode:'WC 160',manualStatus:'unreviewed'},
+    {voucherName:'Manual Test Voucher 2',cv:'TEST-CV-002',description:'Professional services',amount:2500,vatCategory:'S',atcCode:'WI 160',manualStatus:'unreviewed'},
+    {voucherName:'Manual Test Voucher 3',cv:'TEST-CV-003',description:'Non-VAT service',amount:1500,vatCategory:'SNQ',atcCode:'WC 160',manualStatus:'unreviewed'},
+    {voucherName:'Petty Cash Voucher Test',cv:'TEST-PCF-001',description:'Petty cash total row',amount:3000,vatCategory:'GNQ',atcCode:'',manualStatus:'unreviewed'},
+    {voucherName:'Manual Test Voucher 5',cv:'TEST-CV-005',description:'Capital goods test',amount:5000,vatCategory:'CG',atcCode:'WC 160',manualStatus:'unreviewed'}
+  ];
+  samples.forEach((s,i)=>{
+    const vatable=taxableBaseFromAmount(s.amount,s.vatCategory);
+    const nonVatable=nonTaxableBaseFromAmount(s.amount,s.vatCategory);
+    const vat=computeVATFromCategory(vatable,s.vatCategory);
+    const total=s.amount+vat;
+    const date=new Date(baseDate.getFullYear(),baseDate.getMonth(),Math.min(28,i+1));
+    const row=normalizeTransaction({_id:makeId('tx'),voucherName:s.voucherName,cv:s.cv,date:date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),description:s.description,amount:s.amount,vatable,nonVatable,vatCategory:s.vatCategory,vat,total,atcCode:s.atcCode,manualStatus:s.manualStatus,lastReviewed:new Date().toISOString()});
+    transactions.push(row);openCVs.add(row.cv||'(No CV Number)');
+  });
+  activeTab='working';activeMonth='all';
+  if(document.getElementById('workSearch'))document.getElementById('workSearch').value='';
+  if(document.getElementById('workStatus'))document.getElementById('workStatus').value='';
+  if(document.getElementById('varianceFilter'))document.getElementById('varianceFilter').value='';
+  saveAll();renderAll();
+  document.getElementById('addPanel').classList.remove('visible');
+  showToast('5 test purchase transactions added and shown under All Months.');
+}
+function parseCSV(text){const rows=[];let row=[],value='',inQuotes=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(c==='"'){if(inQuotes&&n==='"'){value+='"';i++}else inQuotes=!inQuotes}else if(c===','&&!inQuotes){row.push(value);value=''}else if((c==='\n'||c==='\r')&&!inQuotes){if(c==='\r'&&n==='\n')i++;row.push(value);if(row.some(v=>v.trim()!==''))rows.push(row);row=[];value=''}else value+=c}row.push(value);if(row.some(v=>v.trim()!==''))rows.push(row);return rows}
+function headerKey(h){return String(h||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')}
+function pick(row,...keys){for(const key of keys){const k=headerKey(key);if(row[k]!==undefined&&row[k]!==null&&String(row[k]).trim()!=='')return row[k]}return ''}
+function ensureXLSX(){if(window.XLSX&&XLSX.utils&&XLSX.writeFile)return true;showToast('XLSX engine is not loaded. Please connect to the internet or use a packaged copy of xlsx.full.min.js.');return false}
+function preferredSheetName(type,wb){const names=wb.SheetNames||[];const targets={book:['Purchase Transactions','Purchases','Transactions'],vatLedger:['VAT Balances','VAT Ledger'],ewtLedger:['EWT Balances','EWT Ledger'],vatCategoryMaster:['VAT Categories'],atcMaster:['ATC Master'],supplierMaster:['Supplier Master']};const wanted=targets[type]||[];const match=names.find(n=>wanted.some(w=>n.toLowerCase()===w.toLowerCase()))||names[0];return match}
+function workbookRows(wb,type){const sheetName=preferredSheetName(type,wb);const ws=wb.Sheets[sheetName];if(!ws)return[];return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false}).filter(r=>r.some(v=>String(v??'').trim()!==''))}
+function handleXLSX(e){
+  if(!ensureXLSX())return;
+  clearImportIssueReport();
+  const file=e.target.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    let wb;
+    try{wb=XLSX.read(ev.target.result,{type:'array',cellDates:false})}
+    catch(err){showToast('Unable to read XLSX file. Please check the workbook format.');return}
+    const type=document.getElementById('importType').value;
+    const rows=workbookRows(wb,type);
+    importRows(rows,type,e.target,file.name||'uploaded file');
+  };
+  reader.readAsArrayBuffer(file);
+}
+function importIssueLabel(type){return({book:'Purchase Transactions',vatLedger:'VAT Balances',ewtLedger:'EWT Balances',vatCategoryMaster:'VAT Categories',atcMaster:'ATC Master',supplierMaster:'Supplier Master'})[type]||'Import'}
+function importHtmlEscape(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
+function clearImportIssueReport(){const box=document.getElementById('importIssueReport');if(box){box.style.display='none';box.innerHTML=''}window.__lastImportIssues=[]}
+function addImportIssue(issues,rowNumber,field,message,row){issues.push({rowNumber,field,message,cv:pick(row||{},'cv_no','cv','cv_number','voucher_no','check_voucher'),voucher:pick(row||{},'voucher_name','voucher','voucher_payee','booked_payee','book_payee','payee','supplier_name','supplier','vendor'),rawRow:row||{}})}
+function showImportIssueReport(issues,added,type,fileName){
+  window.__lastImportIssues=issues.slice();
+  const box=document.getElementById('importIssueReport');
+  if(!box)return;
+  if(!issues.length){box.style.display='none';box.innerHTML='';return}
+  const preview=issues.slice(0,80).map(item=>`<li><strong>Row ${importHtmlEscape(item.rowNumber)}</strong>${item.cv?` · CV <code>${importHtmlEscape(item.cv)}</code>`:''}${item.voucher?` · ${importHtmlEscape(item.voucher)}`:''}: ${importHtmlEscape(item.field)} — ${importHtmlEscape(item.message)}</li>`).join('');
+  const more=issues.length>80?`<li>+ ${issues.length-80} more issue(s). Download the issue report for the complete list.</li>`:'';
+  box.innerHTML=`<strong>${importHtmlEscape(importIssueLabel(type))} import found ${issues.length} row issue(s).</strong><div>${added} valid row(s) imported. Fix the listed XLSX rows, then upload again if needed.</div><div class="import-report-actions"><button class="btn" type="button" onclick="downloadImportIssueReport()">Download issue report</button></div><ul>${preview}${more}</ul>`;
+  box.style.display='block';
+}
+function downloadImportIssueReport(){
+  const issues=window.__lastImportIssues||[];
+  if(!issues.length){showToast('No import issues to download.');return}
+  const rows=[['Row Number','Field','Problem','CV No.','Voucher / Supplier']];
+  issues.forEach(item=>rows.push([item.rowNumber,item.field,item.message,item.cv||'',item.voucher||'']));
+  downloadXLSX(rows,'xlsx_import_issue_report.xlsx','Import Issues');
+}
+function strictRateIssue(value){const raw=String(value??'').trim();if(!raw)return 'missing';return parseRate(raw)===null?'invalid':''}
+function importRows(rows,type,fileInput,fileName){
+  if(rows.length<2){showToast('XLSX must have a header row and data.');return}
+  clearImportIssueReport();
+  const headers=rows[0].map(headerKey);
+  const replace=document.getElementById('replaceOnImport').checked;
+  let added=0,skipped=0;
+  const built=[];
+  const issues=[];
+  rows.slice(1).forEach((vals,rowOffset)=>{
+    const xlsxRowNumber=rowOffset+2;
+    const row={};
+    headers.forEach((h,i)=>row[h]=String(vals[i]??'').trim());
+    if(!Object.values(row).some(v=>String(v??'').trim()!==''))return;
+    if(type==='book'){
+      const tin=pick(row,'tin','supplier_tin');
+      const found=findSupplierByTIN(tin);
+      const supplierFromImport=pick(row,'registered_name','registered_supplier','supplier_registered_name','supplier_name','supplier','vendor');
+      const supplier=found?supplierDisplayName(found):supplierFromImport;
+      const voucherName=pick(row,'voucher_name','voucher','voucher_payee','booked_payee','book_payee','payee')||supplier;
+      const cv=pick(row,'cv_no','cv','cv_number','voucher_no','check_voucher');
+      const accountingTitle=pick(row,'accounting_title','accounting_titles','account_title','accounting','gl_account','expense_account');
+      const bankAccount=pick(row,'bank_account','bank','cash_bank_account','disbursement_bank');
+      const rawDate=pick(row,'date','payment_date','document_date');
+      const date=normalizeImportDate(rawDate);
+      const rawVatCategory=pick(row,'vat_category','vat_category_code','vat_code','tax_code');
+      const vatCategory=normalizeVATCategory(rawVatCategory);
+      const rawAtcCode=pick(row,'atc_code','atc','withholding_atc','ewt_atc');
+      const atcCode=normalizeATC(rawAtcCode);
+      let bad=false;
+      if(!voucherName){addImportIssue(issues,xlsxRowNumber,'voucher_name','Missing voucher name or supplier name.',row);bad=true}
+      if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
+      if(!rawDate){addImportIssue(issues,xlsxRowNumber,'date','Missing date. Required format is MM/DD/YYYY, for example 04/05/2026.',row);bad=true}
+      else if(!date){addImportIssue(issues,xlsxRowNumber,'date',`Invalid date "${rawDate}". Required format is MM/DD/YYYY, for example 04/05/2026.`,row);bad=true}
+      if(!accountingTitle){addImportIssue(issues,xlsxRowNumber,'accounting_title','Missing accounting title.',row);bad=true}
+      if(!bankAccount){addImportIssue(issues,xlsxRowNumber,'bank_account','Missing bank account.',row);bad=true}
+      if(rawVatCategory&&!vatCategory){addImportIssue(issues,xlsxRowNumber,'vat_category',`Unknown VAT Category "${rawVatCategory}". Add it to VAT Categories master or correct the code.`,row);bad=true}
+      if(rawAtcCode&&!atcCode){addImportIssue(issues,xlsxRowNumber,'atc_code',`Invalid ATC Code "${rawAtcCode}". Use a format like WC 160 or WI 160.`,row);bad=true}
+      if(bad){skipped++;return}
+      const amount=pick(row,'amount','purchase_amount','base_amount','tax_base_amount','vatable_amount','vatable','non_vatable_amount','non_vat_amount');
+      const total=pick(row,'total_amount','total','gross_amount','gross');
+      built.push(normalizeTransaction({_id:makeId('tx'),voucherName,supplier,tin,cv,inv:pick(row,'invoice_no','invoice','or_no'),date,description:pick(row,'description','particulars','nature'),accountingTitle,bankAccount,amount,vatCategory,total,atcCode,manualStatus:pick(row,'compliance','verification','status'),reviewNote:pick(row,'review_note','note'),lastReviewed:'',address:found?found.address:pick(row,'registered_address','address'),city:found?found.city:pick(row,'city'),zip:found?found.zip:pick(row,'zip_code','zip')}));
+      added++;return;
+    }
+    if(type==='vatLedger'){
+      const cv=pick(row,'cv_no','cv','cv_number');
+      const rawAmount=pick(row,'vat_amount','amount','balance','ledger_amount');
+      let bad=false;
+      if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
+      if(!rawAmount){addImportIssue(issues,xlsxRowNumber,'vat_amount','Missing VAT balance amount.',row);bad=true}
+      if(bad){skipped++;return}
+      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});added++;return;
+    }
+    if(type==='ewtLedger'){
+      const cv=pick(row,'cv_no','cv','cv_number');
+      const rawAmount=pick(row,'ewt_amount','amount','balance','ledger_amount');
+      let bad=false;
+      if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
+      if(!rawAmount){addImportIssue(issues,xlsxRowNumber,'ewt_amount','Missing EWT balance amount.',row);bad=true}
+      if(bad){skipped++;return}
+      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});added++;return;
+    }
+    if(type==='vatCategoryMaster'){
+      const rawCode=pick(row,'vat_category','vat_category_code','code','category');
+      const code=normalizeVatCodeRaw(rawCode);
+      const rawRate=pick(row,'rate','vat_rate','percentage');
+      const rateIssue=strictRateIssue(rawRate);
+      let bad=false;
+      if(!code){addImportIssue(issues,xlsxRowNumber,'vat_category','Missing VAT Category code.',row);bad=true}
+      if(rateIssue){addImportIssue(issues,xlsxRowNumber,'rate',rateIssue==='missing'?'Missing VAT rate.':'Invalid VAT rate. Use 12, 12%, or 0 for non-VAT categories.',row);bad=true}
+      if(bad){skipped++;return}
+      const rate=parseRate(rawRate);
+      built.push(normalizeVatCategoryMaster({code,label:pick(row,'description','label','meaning','desc'),kind:pick(row,'vat_type','type','kind')||(Number(rate||0)>0?'VAT Registered':'Not VAT Registered'),rate}));added++;return;
+    }
+    if(type==='atcMaster'){
+      const rawCode=pick(row,'atc_code','atc');
+      const code=normalizeATC(rawCode);
+      const rawRate=pick(row,'rate','ewt_rate','percentage');
+      const rateIssue=strictRateIssue(rawRate);
+      let bad=false;
+      if(!rawCode){addImportIssue(issues,xlsxRowNumber,'atc_code','Missing ATC Code.',row);bad=true}
+      else if(!code){addImportIssue(issues,xlsxRowNumber,'atc_code',`Invalid ATC Code "${rawCode}". Use a format like WC 160 or WI 160.`,row);bad=true}
+      if(rateIssue){addImportIssue(issues,xlsxRowNumber,'rate',rateIssue==='missing'?'Missing EWT rate.':'Invalid EWT rate. Use 2, 2%, or 0.02.',row);bad=true}
+      if(bad){skipped++;return}
+      built.push(normalizeAtcMaster({atcCode:code,rate:parseRate(rawRate),description:pick(row,'description','desc'),source:pick(row,'source','reference')}));added++;return;
+    }
+    if(type==='supplierMaster'){
+      const tin=pick(row,'tin','supplier_tin');
+      if(!tin){addImportIssue(issues,xlsxRowNumber,'tin','Missing supplier TIN.',row);skipped++;return}
+      built.push(normalizeSupplier({tin,registeredName:pick(row,'registered_name','corporation_name','supplier_name'),lastName:pick(row,'registered_last_name','last_name'),firstName:pick(row,'registered_first_name','first_name'),middleName:pick(row,'registered_middle_name','middle_name'),address:pick(row,'registered_address','address'),city:pick(row,'city'),zip:pick(row,'zip_code','zip')}));added++;return;
+    }
+  });
+  if(type==='book'){if(replace)transactions=[];transactions=transactions.concat(built)}
+  else if(type==='vatLedger'){if(replace)vatLedger=[];vatLedger=vatLedger.concat(built)}
+  else if(type==='ewtLedger'){if(replace)ewtLedger=[];ewtLedger=ewtLedger.concat(built)}
+  else if(type==='vatCategoryMaster'){if(replace)VAT_CATEGORIES=[];VAT_CATEGORIES=VAT_CATEGORIES.concat(built);dedupeVatCategories()}
+  else if(type==='atcMaster'){if(replace)atcMaster=[];atcMaster=atcMaster.concat(built);dedupeAtcMaster()}
+  else{if(replace)supplierMaster=[];supplierMaster=supplierMaster.concat(built);dedupeSupplierMaster()}
+  saveAll();renderAll();
+  showToast(`${added} rows imported${skipped?`; ${skipped} skipped with issue report`:''}.`);
+  if(issues.length){showImportIssueReport(issues,added,type,fileName);document.getElementById('importPanel').classList.add('visible')}
+  else{document.getElementById('importPanel').classList.remove('visible')}
+  if(fileInput)fileInput.value='';
+}
+function templateSpec(type){if(type==='book')return{name:'purchase_transactions_voucher_template.xlsx',sheet:'Purchase Transactions',rows:[['voucher_name','cv_no','date','description','accounting_title','bank_account','tin','invoice_no','amount','total_amount','vat_category','atc_code','compliance','review_note'],['Sample Voucher','CV-0001','01/05/2026','Office supplies','Office Supplies Expense','BDO Checking 1234','123-456-789-000','SI-0001',10000,11200,'S','WC 160','Compliant','Invoice verified'],['Petty Cash Voucher','CV-PCF-001','01/08/2026','Petty cash taxi reimbursement','Transportation Expense','BPI Petty Cash','','',500,500,'SNQ','WI 160','Without Invoice','Needs supplier verification']]};if(type==='vatLedger')return{name:'vat_balances_template.xlsx',sheet:'VAT Balances',rows:[['cv_no','voucher_name','date','vat_amount','ledger_account'],['CV-0001','Sample Voucher','Jan 5',1200,'Input VAT']]};if(type==='ewtLedger')return{name:'ewt_balances_template.xlsx',sheet:'EWT Balances',rows:[['cv_no','voucher_name','date','ewt_amount','ledger_account'],['CV-0001','Sample Voucher','Jan 5',200,'EWT Payable']]};if(type==='vatCategoryMaster')return{name:'vat_categories_template.xlsx',sheet:'VAT Categories',rows:[['vat_category','description','vat_type','rate'],['S','Vatable services','VAT Registered',12],['SNQ','Non-VAT services','Not VAT Registered',0]]};if(type==='atcMaster')return{name:'atc_master_template.xlsx',sheet:'ATC Master',rows:[['atc_code','rate','description','source'],['WC 160',2,'Sample ATC description','2307 reference table'],['WI 160',2,'Service payment - individual','2307 reference table']]};return{name:'supplier_master_template.xlsx',sheet:'Supplier Master',rows:[['tin','registered_name','registered_last_name','registered_first_name','registered_middle_name','registered_address','city','zip_code'],['123-456-789-000','Supplier A Corporation','','','','100 Ayala Avenue','Makati City','1226'],['456-789-012-000','','Dela Cruz','Juan','Santos','45 Mabini Street','Manila','1000']]}}
+function downloadTemplate(){const spec=templateSpec(document.getElementById('importType').value);downloadXLSX(spec.rows,spec.name,spec.sheet)}
+function safeSheetName(name){return String(name||'Sheet1').replace(/[\\/?*\[\]:]/g,' ').slice(0,31)||'Sheet1'}
+function fitColumns(rows){const header=rows[0]||[];return header.map((_,i)=>({wch:Math.min(34,Math.max(10,...rows.slice(0,200).map(r=>String(r[i]??'').length+2)))}))}
+function downloadXLSX(rows,name,sheetName){if(!ensureXLSX())return;const cleanRows=rows.map(r=>r.map(v=>v==null?'':v));const ws=XLSX.utils.aoa_to_sheet(cleanRows);ws['!cols']=fitColumns(cleanRows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,safeSheetName(sheetName));XLSX.writeFile(wb,name)}
+function downloadBlob(content,name){const blob=new Blob([content],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function filteredTransactions(prefix){const search=(document.getElementById(prefix+'Search')?.value||'').toLowerCase();const status=prefix==='summary'?activeSummaryStatus:(document.getElementById(prefix+'Status')?.value||'');const vatType=(document.getElementById('summaryVatType')?.value||'');let tx=visibleTransactionsForMonth();if(search){tx=tx.filter(t=>{const searchable=prefix==='summary'?[t.supplier,t.tin,t.address,t.city,t.zip,t.cv,t.inv,t.date,t.description,t.reviewNote]:[t.voucherName,t.supplier,t.tin,t.address,t.city,t.zip,t.cv,t.inv,t.date,t.description,t.reviewNote,t.vatCategory,t.atcCode];return searchable.some(v=>String(v||'').toLowerCase().includes(search));});}if(status)tx=tx.filter(t=>t.manualStatus===status);if(prefix==='summary'&&vatType)tx=tx.filter(t=>(Number(t.vat||0)>0?'VAT-reg':'Non-VAT')===vatType);return tx}
+function groupKey(t,mode){const supplier=t.supplier||'(For verification)';const voucher=t.voucherName||'(No Voucher Name)';if(mode==='cv')return t.cv||'(No CV Number)';if(mode==='cv_supplier')return `${t.cv||'(No CV Number)'} | ${supplier}`;if(mode==='supplier')return supplier;if(mode==='voucher_supplier')return `${voucher} | ${supplier}`;return voucher}
+function groupSummary(txns,mode){const map=new Map();txns.forEach(t=>{const key=groupKey(t,mode);if(!map.has(key))map.set(key,{key,txns:[]});map.get(key).txns.push(t)});return[...map.values()].map(g=>{g.voucherDisplay=compactList(g.txns.map(t=>t.voucherName),'(No Voucher Name)');g.supplierDisplay=compactList(g.txns.map(t=>t.supplier||'For verification'),'(For verification)');g.tinDisplay=compactList(g.txns.map(t=>t.tin),'--');g.cvDisplay=compactList(g.txns.map(t=>t.cv),'(No CV Number)');g.vatRegDisplay=g.txns.some(t=>Number(t.vat||0)>0)?'VAT-reg':'Non-VAT';return g}).sort((a,b)=>a.key.localeCompare(b.key))}
+function summaryLabels(mode){if(mode==='supplier')return{first:'Registered Supplier',second:'TIN / CVs'};if(mode==='cv')return{first:'CV Number',second:'Registered Supplier'};return{first:'Registered Supplier',second:'TIN / CVs'}}
+
+function setSummaryViewMode(mode){
+  summaryViewMode=mode==='amount'?'amount':'count';
+  renderSummary();
+}
+function setSummaryMetricStatus(status){
+  activeSummaryStatus=activeSummaryStatus===status?'':status;
+  renderAll();
+}
+function summaryStatusStats(tx,status){
+  const rows=tx.filter(t=>t.manualStatus===status);
+  return{count:rows.length,amount:rows.reduce((a,t)=>a+transactionAmount(t),0),vat:rows.reduce((a,t)=>a+Number(t.vat||0),0),total:rows.reduce((a,t)=>a+Number(t.total||0),0)};
+}
+function pctText(part,total){return total?((part/total)*100).toFixed(1).replace(/\.0$/,'')+'%':'0%'}
+function summaryMetricCard(status,label,klass,stats,total,totalVat){
+  const active=activeSummaryStatus===status;
+  const countPct=pctText(stats.count,total);
+  const amountPct=pctText(stats.vat,totalVat);
+  const value=summaryViewMode==='amount'?amountPct:`${stats.count} / ${total}`;
+  const valueClass=summaryViewMode==='amount'?'metric-value summary-pct-value':'metric-value';
+  const sub=summaryViewMode==='amount'?`<span class="summary-card-detail">${peso(stats.vat)}</span> VAT of ${peso(totalVat)} · ${stats.count} txn(s)`:`<span class="pct">${countPct}</span> of transactions · click to filter`;
+  return `<div class="metric ${klass} summary-filter-card ${active?'active':''}" onclick="setSummaryMetricStatus('${status}')" title="Click to filter ${attr(label)} transactions"><div class="metric-label">${esc(label)}</div><div class="${valueClass}">${value}</div><div class="metric-sub">${sub}</div></div>`;
+}
+function renderSummary(){
+  const groupSelect=document.getElementById('summaryGroup');
+  const mode=['supplier','cv'].includes(groupSelect?.value)?groupSelect.value:'supplier';
+  if(activeSummaryReview&&activeSummaryReview.mode!==mode)closeSummaryReviewModal(true);
+  const tx=filteredTransactions('summary');
+  const groups=groupSummary(tx,mode);
+  const total=tx.length;
+  const okStats=summaryStatusStats(tx,'ok');
+  const warnStats=summaryStatusStats(tx,'warn');
+  const errStats=summaryStatusStats(tx,'err');
+  const unrevStats=summaryStatusStats(tx,'unreviewed');
+  const totalAmount=tx.reduce((a,t)=>a+t.total,0);
+  const vatAmount=tx.reduce((a,t)=>a+t.vat,0);
+  const countToggle=document.getElementById('summaryCountToggle');
+  const amountToggle=document.getElementById('summaryAmountToggle');
+  if(countToggle)countToggle.classList.toggle('active',summaryViewMode!=='amount');
+  if(amountToggle)amountToggle.classList.toggle('active',summaryViewMode==='amount');
+  document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}<div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
+  const labels=summaryLabels(mode);
+  const supplierFirst=mode==='supplier';
+  const firstHeader=`<th style="width:17%">${labels.first}</th>`;
+  const secondHeader=`<th style="width:17%">${labels.second}</th>`;
+  const vatTypeHeader='<th style="width:10%">VAT Type</th>';
+  document.getElementById('summaryThead').innerHTML=`<tr>${supplierFirst?firstHeader+vatTypeHeader+secondHeader:firstHeader+secondHeader+vatTypeHeader}<th class="num" style="width:5%">Txn</th><th class="num" style="width:11%">Amount</th><th class="num" style="width:9%">VAT</th><th class="num" style="width:10%">Total</th><th class="num" style="width:9%">EWT</th><th style="width:8%">Score</th><th style="width:9%">Status</th></tr>`;
+  const tbody=document.getElementById('summaryTbody'),tfoot=document.getElementById('summaryTfoot');
+  tbody.innerHTML='';
+  if(!groups.length){tbody.innerHTML='<tr><td colspan="10"><div class="empty-state">No transactions match your filters.</div></td></tr>';tfoot.innerHTML='';closeSummaryReviewModal(true);return}
+  let totals={txn:0,amount:0,vat:0,total:0,ewt:0};
+  groups.forEach(g=>{
+    const st=groupStatus(g.txns);
+    const sums=sumTxns(g.txns);
+    totals.txn+=g.txns.length;totals.amount+=sums.amount;totals.vat+=sums.vat;totals.total+=sums.total;totals.ewt+=sums.ewtAmount;
+    const key=mode+'|'+g.key;
+    const open=activeSummaryReview&&activeSummaryReview.mode===mode&&activeSummaryReview.key===g.key;
+    let firstLabel=g.key;
+    let second=`<div class="sup-name">${esc(g.supplierDisplay)}</div><div class="sup-tin">${esc(g.tinDisplay)}</div><div class="mono">CV: ${esc(g.cvDisplay)}</div>`;
+    if(mode==='supplier'){
+      firstLabel=g.supplierDisplay;
+      second=`<div class="sup-tin">${esc(g.tinDisplay)}</div><div class="mono">CV: ${esc(g.cvDisplay)}</div>`;
+    }else if(mode==='cv'){
+      second=`<div class="sup-name">${esc(g.supplierDisplay)}</div><div class="sup-tin">${esc(g.tinDisplay)}</div>`;
+    }
+    const firstCell=`<td><div class="sup-cell"><svg class="chevron${open?' open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><div><div class="sup-name">${esc(firstLabel)}</div></div></div></td>`;
+    const secondCell=`<td>${second}</td>`;
+    const vatTypeCell=`<td>${vatBadge(g.vatRegDisplay)}</td>`;
+    const tr=document.createElement('tr');
+    tr.className='summary-row';
+    tr.innerHTML=`${supplierFirst?firstCell+vatTypeCell+secondCell:firstCell+secondCell+vatTypeCell}<td class="num">${g.txns.length}</td><td class="num">${peso(sums.amount)}</td><td class="num">${peso(sums.vat)}</td><td class="num">${peso(sums.total)}</td><td class="num">${peso(sums.ewtAmount)}</td><td>${scoreBar(st)}</td><td>${statusBadge(st.status)}</td>`;
+    tr.addEventListener('click',()=>{activeSummaryReview={mode,key:g.key};renderSummary();renderSummaryReviewModal()});
+    tbody.appendChild(tr);
+  });
+  tfoot.innerHTML=`<tr><td colspan="3">Total</td><td class="num">${totals.txn}</td><td class="num">${peso(totals.amount)}</td><td class="num">${peso(totals.vat)}</td><td class="num">${peso(totals.total)}</td><td class="num">${peso(totals.ewt)}</td><td colspan="2"></td></tr>`;
+  renderSummaryReviewModal();
+}
+function summaryHiddenDetailFields(mode){
+  const hidden=new Set(['voucher','vatCategory','atcCode']);
+  if(mode==='supplier')hidden.add('supplier');
+  if(mode==='cv')hidden.add('cv');
+  return hidden;
+}
+function summaryDetailTable(txns,mode='voucher'){
+  const hidden=summaryHiddenDetailFields(mode);
+  const columns=[
+    {key:'cv',label:'CV no.',cls:'mono',cell:t=>esc(t.cv)},
+    {key:'supplier',label:'Registered supplier',cell:t=>esc(t.supplier||'For verification')},
+    {key:'invoice',label:'Invoice / OR',cls:'mono',cell:t=>t.inv?esc(t.inv):'<span class="muted">Not issued</span>'},
+    {key:'date',label:'Date',cell:t=>esc(t.date)},
+    {key:'description',label:'Description',cell:t=>esc(t.description||'--')},
+    {key:'amount',label:'Amount',cls:'num',cell:t=>peso(transactionAmount(t))},
+    {key:'vat',label:'Computed VAT',cls:'num',cell:t=>peso(t.vat)},
+    {key:'total',label:'Total',cls:'num',cell:t=>peso(t.total)},
+    {key:'ewt',label:'Computed EWT',cls:'num',cell:t=>peso(t.ewtAmount)},
+    {key:'status',label:'Status',cell:t=>statusBadge(t.manualStatus)}
+  ].filter(col=>!hidden.has(col.key));
+  const classAttr=col=>col.cls?` class="${col.cls}"`:'';
+  return `<table class="dtable"><thead><tr>${columns.map(col=>`<th${classAttr(col)}>${col.label}</th>`).join('')}</tr></thead><tbody>${txns.map(t=>`<tr>${columns.map(col=>`<td${classAttr(col)}>${col.cell(t)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+function summaryModeTitle(mode){
+  if(mode==='supplier')return 'Registered Supplier';
+  if(mode==='cv')return 'CV Number';
+  if(mode==='cv_supplier')return 'CV + Supplier';
+  if(mode==='voucher_supplier')return 'Voucher + Supplier';
+  return 'Voucher Name';
+}
+function summaryDetailValue(key,t){
+  if(key==='voucher')return t.voucherName||'--';
+  if(key==='supplier')return t.supplier||'For verification';
+  if(key==='cv')return t.cv||'(No CV Number)';
+  return '';
+}
+function summaryReadonlyField(label,value,extraClass=''){
+  return `<div class="compact-field"><label>${esc(label)}</label><div class="summary-readonly-value ${extraClass}">${value}</div></div>`;
+}
+function summaryStatusPill(status){return `<div class="summary-status-pill ${verificationStatusClass(status)}">${esc(verificationText(status))}</div>`}
+function summaryGroupMetaLine(g,mode){
+  if(mode==='supplier')return `TIN: ${esc(g.tinDisplay)} · CVs: ${esc(g.cvDisplay)}`;
+  if(mode==='cv')return `Suppliers: ${esc(g.supplierDisplay)} · TIN: ${esc(g.tinDisplay)}`;
+  return `Suppliers: ${esc(g.supplierDisplay)} · CVs: ${esc(g.cvDisplay)}`;
+}
+function summaryReviewCards(txns,mode='voucher'){
+  if(!txns.length)return '<div class="empty-state" style="padding:16px">No transaction rows for this summary group.</div>';
+  const hidden=summaryHiddenDetailFields(mode);
+  const cards=txns.map(t=>{
+    const supplierFields=[];
+    if(!hidden.has('supplier'))supplierFields.push(summaryReadonlyField('Registered Supplier',esc(t.supplier||'For verification')));
+    const invoiceFields=[];
+    if(!hidden.has('cv'))invoiceFields.push(summaryReadonlyField('CV Number',esc(t.cv||'--')));
+    invoiceFields.push(summaryReadonlyField('Invoice / OR',t.inv?esc(t.inv):'<span class="muted">Not issued</span>'));
+    invoiceFields.push(summaryReadonlyField('Date',esc(t.date||'--')));
+    const supplierSection=supplierFields.length?`<div class="verification-section section-supplier summary-section-supplier">
+          <div class="verification-section-title">Supplier</div>
+          <div class="compact-grid">${supplierFields.join('')}</div>
+        </div>`:'';
+    return `<div class="verification-card summary-popup-card ${supplierFields.length?'':'no-supplier'}">
+      <div class="verification-card-head summary-thin-head">
+        <div class="summary-desc-wrap"><div class="field-label">Description</div><div class="readonly-desc">${esc(t.description||'--')}</div></div>
+        <div class="action-buttons verification-actions-right"><span class="autosave-status">Read-only summary</span></div>
+      </div>
+      <div class="verification-line summary-thin-line">
+        ${supplierSection}
+        <div class="verification-section section-tax">
+          <div class="verification-section-title">References</div>
+          <div class="compact-grid">${invoiceFields.join('')}</div>
+        </div>
+        <div class="verification-section section-amounts">
+          <div class="verification-section-title">Computed amounts</div>
+          <div class="compact-grid">
+            ${summaryReadonlyField('Amount',peso(transactionAmount(t)),'money')}
+            ${summaryReadonlyField('Computed VAT',peso(t.vat),'money')}
+            ${summaryReadonlyField('Total',peso(t.total),'money')}
+            ${summaryReadonlyField('Computed EWT',peso(t.ewtAmount),'money')}
+          </div>
+        </div>
+        <div class="verification-section section-verification">
+          <div class="verification-section-title">Verification</div>
+          <div class="compact-grid">
+            <div class="compact-field"><label>Status</label>${summaryStatusPill(t.manualStatus)}</div>
+            <div class="compact-field compact-note"><label>Notes</label><div class="summary-readonly-value summary-note-value">${esc(t.reviewNote||'--')}</div></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="verification-card-list summary-thin-card-list">${cards}</div>`;
+}
+
+function renderSummaryReviewModal(){
+  const modal=document.getElementById('summaryReviewModal');
+  const content=document.getElementById('summaryReviewModalContent');
+  if(!modal||!content)return;
+  if(activeTab!=='summary'||!activeSummaryReview){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
+  const selectedSummaryMode=document.getElementById('summaryGroup')?.value||'supplier';
+  const mode=['supplier','cv'].includes(activeSummaryReview.mode)?activeSummaryReview.mode:(['supplier','cv'].includes(selectedSummaryMode)?selectedSummaryMode:'supplier');
+  const groups=groupSummary(filteredTransactions('summary'),mode);
+  const g=groups.find(item=>item.key===activeSummaryReview.key);
+  if(!g){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';activeSummaryReview=null;return;}
+  const sums=sumTxns(g.txns);
+  const st=groupStatus(g.txns);
+  const groupTitle=summaryModeTitle(mode);
+  const hidden=summaryHiddenDetailFields(mode);
+  const groupedHidden=[...hidden].filter(k=>['supplier','cv'].includes(k));
+  const hiddenNames=groupedHidden.map(k=>k==='supplier'?'Registered Supplier':k==='cv'?'CV Number':k).join(', ');
+  modal.classList.add('visible');
+  modal.setAttribute('aria-hidden','false');
+  content.innerHTML=`<div class="detail-inner review-workspace summary-review-workspace">
+    <div class="review-workspace-header">
+      <div class="review-workspace-title">
+        <div class="review-title-main"><span id="summaryReviewTitle">${esc(groupTitle)}: ${esc(g.key)}</span><span class="review-voucher">${summaryGroupMetaLine(g,mode)}</span></div>
+        <div class="review-chips">
+          <span class="review-chip"><strong>${g.txns.length}</strong> transaction row(s)</span>
+          <span class="review-chip"><strong>${verificationText(st.status)}</strong> group status</span>
+          <span class="review-chip"><strong>${vatTypeText(g.vatRegDisplay)}</strong> VAT type</span>
+          ${hiddenNames?`<span class="review-chip">Grouped field hidden in line cards: <strong>${esc(hiddenNames)}</strong></span>`:''}
+        </div>
+      </div>
+      <div class="review-actions"><button class="cv-review-close" data-close-summary-review="1" aria-label="Close">×</button></div>
+    </div>
+    <div class="summary-mini-metrics">
+      <div class="summary-mini-card"><div class="mini-label">Transactions</div><div class="mini-value">${g.txns.length}</div><div class="mini-sub">Rows in this group</div></div>
+      <div class="summary-mini-card"><div class="mini-label">Amount</div><div class="mini-value">${peso(sums.amount)}</div><div class="mini-sub">Base purchase amount</div></div>
+      <div class="summary-mini-card"><div class="mini-label">Computed VAT</div><div class="mini-value">${peso(sums.vat)}</div><div class="mini-sub">Input VAT</div></div>
+      <div class="summary-mini-card"><div class="mini-label">Total</div><div class="mini-value">${peso(sums.total)}</div><div class="mini-sub">Gross purchase total</div></div>
+      <div class="summary-mini-card"><div class="mini-label">Computed EWT</div><div class="mini-value">${peso(sums.ewtAmount)}</div><div class="mini-sub">Withholding tax</div></div>
+      <div class="summary-mini-card"><div class="mini-label">Compliant</div><div class="mini-value">${st.okPct}%</div><div class="mini-sub">${st.ok} compliant · ${st.err} non-compliant</div></div>
+    </div>
+    <div class="cv-review-body">${summaryReviewCards(g.txns,mode)}</div>
+  </div>`;
+}
+function closeSummaryReviewModal(silent=false){
+  const modal=document.getElementById('summaryReviewModal');
+  const content=document.getElementById('summaryReviewModalContent');
+  activeSummaryReview=null;
+  if(modal){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true')}
+  if(content)content.innerHTML='';
+  if(!silent&&activeTab==='summary')renderSummary();
+}
+
+function ledgerSearchMatch(row,search){return [row.cv,row.supplier,row.date,row.amount,row.account].some(v=>String(v||'').toLowerCase().includes(search))}
+function buildCVGroups(){const map=new Map();const ensure=cv=>{const key=cv||'(No CV Number)';if(!map.has(key))map.set(key,{cv:key,txns:[],vatRows:[],ewtRows:[]});return map.get(key)};visibleTransactionsForMonth().forEach(t=>ensure(t.cv).txns.push(t));visibleVatLedgerForMonth().forEach(r=>{const g=map.get(r.cv||'(No CV Number)');if(g)g.vatRows.push(r)});visibleEwtLedgerForMonth().forEach(r=>{const g=map.get(r.cv||'(No CV Number)');if(g)g.ewtRows.push(r)});return[...map.values()].map(g=>{const sums=sumTxns(g.txns);g.bookVat=sums.vat;g.bookEwt=sums.ewtAmount;g.bookTotal=sums.total;g.vatLedger=g.vatRows.reduce((a,r)=>a+r.amount,0);g.ewtLedger=g.ewtRows.reduce((a,r)=>a+r.amount,0);g.vatDiff=g.bookVat-g.vatLedger;g.ewtDiff=g.bookEwt-g.ewtLedger;g.voucherNames=compactList(g.txns.map(t=>t.voucherName),'--');g.dateDisplay=compactList(g.txns.map(t=>t.date),'--');g.accountingTitles=compactList(g.txns.map(t=>t.accountingTitle),'--');g.bankAccounts=compactList(g.txns.map(t=>t.bankAccount),'--');g.suppliers=compactList(g.txns.map(t=>t.supplier||'For verification'),'--');g.status=groupStatus(g.txns);return g}).sort((a,b)=>a.cv.localeCompare(b.cv))}
+function filteredCVGroups(){const search=(document.getElementById('workSearch').value||'').toLowerCase();const status=document.getElementById('workStatus').value;const variance=document.getElementById('varianceFilter').value;let groups=buildCVGroups();if(search)groups=groups.filter(g=>String(g.cv).toLowerCase().includes(search)||String(g.voucherNames).toLowerCase().includes(search)||String(g.suppliers).toLowerCase().includes(search)||g.txns.some(t=>[t.voucherName,t.supplier,t.tin,t.inv,t.date,t.description,t.accountingTitle,t.bankAccount,t.reviewNote].some(v=>String(v||'').toLowerCase().includes(search)))||g.vatRows.some(r=>ledgerSearchMatch(r,search))||g.ewtRows.some(r=>ledgerSearchMatch(r,search)));if(status)groups=groups.filter(g=>g.txns.some(t=>t.manualStatus===status));if(variance==='vat')groups=groups.filter(g=>!isBalanced(g.vatDiff));if(variance==='ewt')groups=groups.filter(g=>!isBalanced(g.ewtDiff));if(variance==='any')groups=groups.filter(g=>!isBalanced(g.vatDiff)||!isBalanced(g.ewtDiff));return sortWorkingGroups(groups)}
+function amountWithBalance(value,diff){const cls=isBalanced(diff)?'':'ledger-alert';return `<span class="${cls}">${peso(value)}</span>`}
+
+function togglePurchaseInfo(){document.getElementById('purchaseInfoPanel')?.classList.toggle('visible')}
+function birVisualWarningReportLabel(report){
+  return ({slpExcel:'SLP Excel',slpDat:'SLP DAT',qapExcel:'QAP Excel',qapDat:'QAP DAT',purchaseBook:'Purchase Book',cashBook:'Cash Disbursement Book'})[report]||report;
+}
+function transactionIncludedInBirVisualWarningScope(t,report){
+  if(report==='cashBook')return true;
+  if(report==='qapExcel'||report==='qapDat')return hasTaxClassification(t)&&(hasAtcCode(t)||Number(t?.ewtAmount||0)>0);
+  return hasTaxClassification(t);
+}
+function transactionReviewReasons(t){
+  const reports=['slpExcel','slpDat','qapExcel','qapDat','purchaseBook','cashBook'];
+  const reasons=[];
+  reports.forEach(report=>{
+    if(!transactionIncludedInBirVisualWarningScope(t,report))return;
+    const missing=birTransactionBlockersForReport(t,report);
+    if(missing.length)reasons.push(`${birVisualWarningReportLabel(report)} blocker: missing or unresolved ${missing.join(', ')}`);
+  });
+  return [...new Set(reasons)];
+}
+function groupReviewReasons(g){
+  const reasons=[];
+  (g.txns||[]).forEach(t=>transactionReviewReasons(t).forEach(r=>reasons.push(r)));
+  return [...new Set(reasons)];
+}
+function groupNeedsReview(g){return groupReviewReasons(g).length>0}
+function reviewTitleFromReasons(reasons){return reasons.length?'BIR export blocker: '+reasons.slice(0,6).join('; ')+(reasons.length>6?'; ...':''):''}
+
+function parseWorkSortDate(value){
+  const raw=String(value??'').trim();
+  if(!raw||raw==='--'||raw==='-'||raw.toLowerCase()==='n/a')return Number.POSITIVE_INFINITY;
+  const strict=dateSortNumber(raw);
+  if(strict!==null)return strict;
+  const numeric=Number(raw);
+  if(Number.isFinite(numeric)&&numeric>20000&&numeric<70000)return numeric;
+  let m=raw.match(/^\s*(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?/);
+  if(m)return Number(m[1])*10000+Number(m[2])*100+Number(m[3]||1);
+  m=raw.match(/^\s*(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/);
+  if(m){
+    const first=Number(m[1]),second=Number(m[2]);
+    const month=first>12?second:first;
+    const day=first>12?first:second;
+    let year=m[3]?Number(m[3]):0;
+    if(year&&year<100)year+=2000;
+    return year*10000+month*100+day;
+  }
+  const lower=raw.toLowerCase();
+  let day=Number((raw.match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/i)||[])[1]||1);
+  let year=Number((raw.match(/\b(19\d{2}|20\d{2})\b/)||[])[1]||0);
+  for(let i=0;i<MONTH_NAMES.length;i++){
+    if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`,'i').test(lower)))return year*10000+(i+1)*100+day;
+  }
+  const parsed=new Date(raw);
+  if(!Number.isNaN(parsed.getTime()))return parsed.getFullYear()*10000+(parsed.getMonth()+1)*100+parsed.getDate();
+  return Number.POSITIVE_INFINITY;
+}
+function naturalCompareText(a,b){return String(a??'').localeCompare(String(b??''),undefined,{numeric:true,sensitivity:'base'})}
+function compareWorkSortValues(a,b,key){
+  if(key==='date')return parseWorkSortDate(a)-parseWorkSortDate(b);
+  return naturalCompareText(a,b);
+}
+function workSortValueForGroup(g,key){
+  if(key==='date')return Math.min(...(g.txns||[]).map(t=>parseWorkSortDate(t.date)).concat([Number.POSITIVE_INFINITY]));
+  if(key==='voucher')return compactList((g.txns||[]).map(t=>t.voucherName),'');
+  return g.cv||'';
+}
+function sortWorkingGroups(groups){
+  const key=workSort?.key||'date';
+  const dir=workSort?.dir==='desc'?-1:1;
+  return [...groups].sort((a,b)=>{
+    let cmp=compareWorkSortValues(workSortValueForGroup(a,key),workSortValueForGroup(b,key),key);
+    if(!cmp&&key!=='date')cmp=compareWorkSortValues(workSortValueForGroup(a,'date'),workSortValueForGroup(b,'date'),'date');
+    if(!cmp&&key!=='cv')cmp=naturalCompareText(a.cv,b.cv);
+    if(!cmp&&key!=='voucher')cmp=naturalCompareText(a.voucherNames,b.voucherNames);
+    return cmp*dir;
+  });
+}
+function sortWorkingTransactions(txns){
+  const key=workSort?.key||'date';
+  const dir=workSort?.dir==='desc'?-1:1;
+  return [...(txns||[])].sort((a,b)=>{
+    const av=key==='date'?a.date:key==='voucher'?a.voucherName:a.cv;
+    const bv=key==='date'?b.date:key==='voucher'?b.voucherName:b.cv;
+    let cmp=compareWorkSortValues(av,bv,key);
+    if(!cmp)cmp=compareWorkSortValues(a.date,b.date,'date')||naturalCompareText(a.cv,b.cv)||naturalCompareText(a.voucherName,b.voucherName);
+    return cmp*dir;
+  });
+}
+function setWorkSort(key){
+  if(workSort.key===key)workSort.dir=workSort.dir==='asc'?'desc':'asc';
+  else workSort={key,dir:'asc'};
+  renderWorking();
+}
+function workSortHeader(key,label){
+  const active=workSort.key===key;
+  const arrow=active?(workSort.dir==='asc'?'▲':'▼'):'↕';
+  return `<button type="button" class="sort-th-btn ${active?'active':''}" onclick="setWorkSort('${attr(key)}')" title="Sort by ${attr(label)}"><span>${esc(label)}</span><span class="sort-arrow">${arrow}</span></button>`;
+}
+
+function togglePurchaseBreakdown(kind){renderWorking()}
+function taxGroupKey(value,fallback){const v=String(value||'').trim();return v||fallback}
+function purchaseVatBreakdownRows(txns){
+  const map=new Map();
+  txns.forEach(t=>{
+    const code=normalizeVATCategory(t.vatCategory)||'Uncoded';
+    const label=code==='Uncoded'?'Uncoded VAT Category':vatCategoryText(code);
+    if(!map.has(code))map.set(code,{code,label,rows:0,amount:0,vat:0,total:0});
+    const g=map.get(code);g.rows++;g.amount+=transactionAmount(t);g.vat+=Number(t.vat||0);g.total+=Number(t.total||0);
+  });
+  return [...map.values()].sort((a,b)=>b.amount-a.amount||a.code.localeCompare(b.code));
+}
+function purchaseEwtBreakdownRows(txns){
+  const map=new Map();
+  txns.forEach(t=>{
+    const code=normalizeATC(t.atcCode)||'Uncoded';
+    const rate=code==='Uncoded'?'--':atcRateText(code);
+    const label=code==='Uncoded'?'Uncoded ATC':`${code} · ${rate}`;
+    if(!map.has(code))map.set(code,{code,label,rate,rows:0,amount:0,total:0,ewt:0,net:0});
+    const g=map.get(code);g.rows++;g.amount+=transactionAmount(t);g.total+=Number(t.total||0);g.ewt+=Number(t.ewtAmount||0);g.net+=Number(t.total||0)-Number(t.ewtAmount||0);
+  });
+  return [...map.values()].sort((a,b)=>b.ewt-a.ewt||b.amount-a.amount||a.code.localeCompare(b.code));
+}
+function setPurchaseBreakdown(kind){
+  const next=kind==='ewt'?'ewt':'vat';
+  activePurchaseBreakdown=activePurchaseBreakdown===next?null:next;
+  renderWorking();
+}
+function renderPurchaseTaxBreakdown(txns){
+  const panel=document.getElementById('purchaseTaxBreakdown');
+  if(!panel)return;
+  if(activeTab!=='working'||!activePurchaseBreakdown){panel.classList.remove('visible');panel.innerHTML='';return;}
+  const kind=activePurchaseBreakdown==='ewt'?'ewt':'vat';
+  const isVat=kind==='vat';
+  const rows=isVat?purchaseVatBreakdownRows(txns):purchaseEwtBreakdownRows(txns);
+  const title=isVat?'Purchase VAT by VAT Category Code':'Purchase EWT by ATC Code';
+  const subtitle=isVat?'VAT Category summary for the selected month.':'ATC Code summary for the selected month.';
+  const total=rows.reduce((a,r)=>({rows:a.rows+r.rows,amount:a.amount+r.amount,vat:a.vat+(r.vat||0),total:a.total+(r.total||0),ewt:a.ewt+(r.ewt||0),net:a.net+(r.net||0)}),{rows:0,amount:0,vat:0,total:0,ewt:0,net:0});
+  const body=rows.length?rows.map(r=>isVat?`<tr><td class="mono">${esc(r.code)}</td><td>${esc(r.label)}</td><td class="num">${peso(r.amount)}</td><td class="num">${peso(r.vat)}</td><td class="num">${peso(r.total)}</td></tr>`:`<tr><td class="mono">${esc(r.code)}</td><td>${esc(r.rate)}</td><td class="num">${peso(r.amount)}</td><td class="num">${peso(r.total)}</td><td class="num">${peso(r.ewt)}</td><td class="num">${peso(r.net)}</td></tr>`).join(''):`<tr><td colspan="${isVat?5:6}"><div class="empty-state" style="padding:12px">No purchase rows available.</div></td></tr>`;
+  const footer=isVat?`<tr class="tax-breakdown-total"><td colspan="2">Total</td><td class="num">${peso(total.amount)}</td><td class="num">${peso(total.vat)}</td><td class="num">${peso(total.total)}</td></tr>`:`<tr class="tax-breakdown-total"><td colspan="2">Total</td><td class="num">${peso(total.amount)}</td><td class="num">${peso(total.total)}</td><td class="num">${peso(total.ewt)}</td><td class="num">${peso(total.net)}</td></tr>`;
+  panel.innerHTML=`<div class="tax-breakdown-grid"><div class="tax-breakdown-box"><div class="tax-breakdown-title">${title}</div><div class="tax-breakdown-sub">${subtitle}</div><div class="tax-breakdown-wrap"><table class="tax-breakdown-table"><thead>${isVat?'<tr><th style="width:13%">VAT Category</th><th style="width:32%">Description</th><th class="num" style="width:18%">Amount</th><th class="num" style="width:18%">VAT Amount</th><th class="num" style="width:19%">Total Amount</th></tr>':'<tr><th style="width:13%">ATC Code</th><th style="width:12%">Rate</th><th class="num" style="width:18%">Amount</th><th class="num" style="width:18%">Total Amount</th><th class="num" style="width:18%">EWT Amount</th><th class="num" style="width:21%">Net Amount</th></tr>'}</thead><tbody>${body}</tbody><tfoot>${footer}</tfoot></table></div></div></div>`;
+  panel.classList.add('visible');
+}
+function renderWorking(){
+  const groups=filteredCVGroups();
+  const allTx=visibleTransactionsForMonth();
+  const vatRows=visibleVatLedgerForMonth();
+  const ewtRows=visibleEwtLedgerForMonth();
+  const bookVat=allTx.reduce((a,t)=>a+t.vat,0);
+  const bookEwt=allTx.reduce((a,t)=>a+t.ewtAmount,0);
+  const vatBal=vatRows.reduce((a,r)=>a+r.amount,0);
+  const ewtBal=ewtRows.reduce((a,r)=>a+r.amount,0);
+  const vatDiff=bookVat-vatBal;
+  const ewtDiff=bookEwt-ewtBal;
+  const unrev=allTx.filter(t=>t.manualStatus==='unreviewed').length;
+  const forVerification=allTx.filter(t=>!t.supplier||!t.tin).length;
+  const supplierSpecialCount=allTx.filter(t=>supplierSpecialIssues(t).length).length;
+  document.getElementById('reconMetrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${allTx.length} purchase rows</div></div><div class="metric review"><div class="metric-label">Supplier Data Needed</div><div class="metric-value">${forVerification}</div><div class="metric-sub">blank supplier or TIN</div></div><div class="metric money-metric breakdown-tab ${isBalanced(vatDiff)?'ok':'err'} ${activePurchaseBreakdown==='vat'?'active':''}" onclick="setPurchaseBreakdown('vat')" aria-pressed="${activePurchaseBreakdown==='vat'?'true':'false'}"><div class="metric-label">Purchase VAT</div><div class="metric-value">${peso(bookVat)}</div><div class="metric-sub">VAT Category breakdown</div></div><div class="metric money-metric breakdown-tab ${isBalanced(ewtDiff)?'ok':'err'} ${activePurchaseBreakdown==='ewt'?'active':''}" onclick="setPurchaseBreakdown('ewt')" aria-pressed="${activePurchaseBreakdown==='ewt'?'true':'false'}"><div class="metric-label">Purchase EWT</div><div class="metric-value">${peso(bookEwt)}</div><div class="metric-sub">ATC Code breakdown</div></div><div class="metric review"><div class="metric-label">Unreviewed</div><div class="metric-value">${unrev}</div><div class="metric-sub">needs manual tag</div></div><div class="metric ${supplierSpecialCount?'warn':'ok'}"><div class="metric-label">Supplier Detail Review</div><div class="metric-value">${supplierSpecialCount}</div><div class="metric-sub">special character warning(s)</div></div>`;
+  renderPurchaseTaxBreakdown(allTx);
+  document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num" style="width:11%">Purchase VAT</th><th class="num" style="width:11%">Purchase EWT</th><th class="num" style="width:12%">Total Amount</th><th style="width:10%"><span class="column-info-wrap">Balance check <button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th style="width:10%"><span class="column-info-wrap">Verification <button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, or Unreviewed. Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
+  const tbody=document.getElementById('workTbody'),tfoot=document.getElementById('workTfoot');
+  tbody.innerHTML='';
+  if(!groups.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state">No CV groups match your filters.</div></td></tr>';tfoot.innerHTML='';focusedCV=null;renderCVReviewModal();return}
+  let totalAmount=0;
+  let selectedStillVisible=false;
+  groups.forEach(g=>{
+    const open=focusedCV===g.cv;
+    if(open)selectedStillVisible=true;
+    const cvTotal=g.txns.reduce((a,t)=>a+t.total,0);
+    totalAmount+=cvTotal;
+    const vatOk=isBalanced(g.vatDiff),ewtOk=isBalanced(g.ewtDiff);
+    const check=vatOk&&ewtOk?badge('ok','Balanced'):badge('err','Review balances');
+    const tr=document.createElement('tr');
+    const reviewReasons=groupReviewReasons(g);
+    tr.className='summary-row'+(open?' active-cv':'')+(reviewReasons.length?' review-needed-row':'');
+    if(reviewReasons.length)tr.title=reviewTitleFromReasons(reviewReasons);
+    tr.innerHTML=`<td>${esc(g.dateDisplay||'--')}</td><td><div class="sup-cell"><svg class="chevron${open?' open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><div><div class="sup-name">${esc(g.cv)}</div></div></div></td><td>${esc(g.voucherNames)}</td><td class="num">${amountWithBalance(g.bookVat,g.vatDiff)}</td><td class="num">${amountWithBalance(g.bookEwt,g.ewtDiff)}</td><td class="num">${peso(cvTotal)}</td><td>${check}</td><td>${scoreBar(g.status)}</td>`;
+    tr.addEventListener('click',()=>{focusedCV=g.cv;openCVs.clear();openCVs.add(g.cv);renderWorking()});
+    tbody.appendChild(tr);
+  });
+  if(focusedCV&&!selectedStillVisible){focusedCV=null;openCVs.clear()}
+  tfoot.innerHTML=`<tr><td colspan="3">Grand total</td><td class="num">${amountWithBalance(bookVat,vatDiff)}</td><td class="num">${amountWithBalance(bookEwt,ewtDiff)}</td><td class="num">${peso(totalAmount)}</td><td colspan="2"></td></tr>`;
+  renderCVReviewModal();
+}
+
+function renderCVReviewModal(){
+  const modal=document.getElementById('cvReviewModal');
+  const content=document.getElementById('cvReviewModalContent');
+  if(!modal||!content)return;
+  if(activeTab!=='working'||!focusedCV){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
+  const g=buildCVGroups().find(item=>item.cv===focusedCV);
+  if(!g){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
+  const cvTotal=g.txns.reduce((a,t)=>a+t.total,0);
+  modal.classList.add('visible');
+  modal.setAttribute('aria-hidden','false');
+  content.innerHTML=`<div class="detail-inner review-workspace" data-cv="${attr(g.cv)}"><div class="review-workspace-header"><div class="review-workspace-title"><div class="review-title-main" id="cvReviewTitle"><span class="review-cv">${esc(g.cv)}</span><span class="review-voucher">${esc(g.voucherNames)}</span></div><div class="review-chips"><span class="review-chip"><strong>Date</strong> ${esc(g.dateDisplay||'--')}</span><span class="review-chip"><strong>Lines</strong> ${g.txns.length}</span><span class="review-chip"><strong>VAT</strong> ${peso(g.bookVat)}</span><span class="review-chip"><strong>EWT</strong> ${peso(g.bookEwt)}</span><span class="review-chip"><strong>Total</strong> ${peso(cvTotal)}</span></div></div><div class="review-actions"><button type="button" class="cv-review-close" data-close-cv-review aria-label="Close CV verification">×</button></div></div><div class="cv-review-body">${workingDetailTable(g)}</div></div>`;
+}
+function closeCVReviewModal(){focusedCV=null;openCVs.clear();renderWorking()}
+function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(s==='ok'?'ok':s==='warn'?'warn':s==='err'?'err':'unreviewed')}
+function applyVerificationStatusClass(el){if(!el)return;el.classList.remove('status-ok','status-warn','status-err','status-unreviewed');el.classList.add(verificationStatusClass(el.value))}
+function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant']];const cls=verificationStatusClass(t.manualStatus);return `<select class="select-small wp-status wp-autosave verification-status-select ${cls}" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
+function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.address);if(t.city)parts.push(t.city);if(t.zip)parts.push(t.zip);return parts.length?parts.join(', '):'--'}
+function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !/^[A-Za-z0-9 .,&()'\/-]*$/.test(v)}
+function supplierSpecialIssues(obj){const checks=[['supplier','Registered Name'],['registeredName','Registered Name'],['lastName','Registered Last Name'],['firstName','Registered First Name'],['middleName','Registered Middle Name'],['address','Registered Address'],['city','City'],['zip','ZIP Code']];const seen=new Set();const issues=[];checks.forEach(([key,label])=>{if(seen.has(label))return;const val=obj?.[key];if(supplierFieldHasSpecial(val)){seen.add(label);issues.push(label)}});return issues}
+function specialFieldClass(value){return supplierFieldHasSpecial(value)?' special-review-field':''}
+function supplierSpecialWarningHtml(t){const issues=supplierSpecialIssues(t);const manual=!!t.supplierManualOverride;if(!issues.length&&!manual)return '';const label=issues.length?`Special character review: ${issues.join(', ')}`:'Manual supplier override active';return `<div class="supplier-special-alert"><span><strong>${esc(label)}</strong><br/>TIN is excluded from this check. Review and correct supplier details before BIR exports if needed.</span><button type="button" class="btn" onclick="enableSupplierManualIntervention('${attr(t._id)}')">Manual intervention</button></div>`}
+function enableSupplierManualIntervention(id){setValue('wp_supplier_manual_'+id,'1');const panel=document.getElementById('wp_supplier_panel_'+id);if(panel)panel.classList.add('visible');['wp_supplier_'+id,'wp_address_'+id,'wp_city_'+id,'wp_zip_'+id].forEach(fid=>{const el=document.getElementById(fid);if(el)el.removeAttribute('readonly')});setAutoSaveStatus(id,'Manual edit','warn');showToast('Manual supplier detail intervention enabled for this line.')}
+function refreshSupplierFullAddress(id){setValue('wp_full_address_'+id,supplierLookupSummary({address:getValue('wp_address_'+id),city:getValue('wp_city_'+id),zip:getValue('wp_zip_'+id)}))}
+function supplierSpecialCell(value){return `<td class="${supplierFieldHasSpecial(value)?'special-review-cell':''}">${esc(value||'--')}</td>`}
+function loadSupplierMasterForEdit(tin){const s=findSupplierByTIN(tin);if(!s){showToast('Supplier Master row not found.');return}switchTab('masters');switchMasterSub('suppliers');setValue('mc_sup_tin',s.tin);setValue('mc_sup_registered',s.registeredName);setValue('mc_sup_last',s.lastName);setValue('mc_sup_first',s.firstName);setValue('mc_sup_middle',s.middleName);setValue('mc_sup_address',s.address);setValue('mc_sup_city',s.city);setValue('mc_sup_zip',s.zip);showToast('Supplier Master row loaded for manual correction.')}
+
+function vatCategorySelect(t){const val=normalizeVATCategory(t.vatCategory);return `<select class="select-small wp-vatcat wp-autosave" data-id="${attr(t._id)}" id="wp_vatcat_${attr(t._id)}">${['','S','G','I','CG','SNQ','GNQ'].map(c=>`<option value="${c}" ${val===c?'selected':''}>${c?vatCategoryText(c):'Select code'}</option>`).join('')}</select>`}
+function atcMasterOptions(selected=''){const selectedCode=normalizeATC(selected);const rows=(Array.isArray(atcMaster)?atcMaster:[]).map(normalizeAtcMaster).filter(a=>normalizeATC(a.atcCode));const seen=new Set();let opts=['<option value="">Select ATC Code</option>'];rows.forEach(a=>{const code=normalizeATC(a.atcCode);if(!code||seen.has(code))return;seen.add(code);const label=`${atcText(code)}${a.rate!==null?' - '+a.rate+'%':''}${a.description?' · '+a.description:''}`;opts.push(`<option value="${attr(atcText(code))}" ${selectedCode===code?'selected':''}>${esc(label)}</option>`)});if(selectedCode&&!seen.has(selectedCode))opts.push(`<option value="${attr(atcText(selectedCode))}" selected>${esc(atcText(selectedCode)+' - missing in ATC Master')}</option>`);return opts.join('')}
+function atcCodeSelect(t){return `<select class="select-small mono wp-atc wp-autosave" data-id="${attr(t._id)}" id="wp_atc_${attr(t._id)}">${atcMasterOptions(t.atcCode)}</select>`}
+function populateAddAtcDropdown(){const el=document.getElementById('f_atc_code');if(!el)return;const current=el.value;el.innerHTML=atcMasterOptions(current)}
+function workingDetailTable(g){
+  if(!g.txns.length)return '<div class="empty-state" style="padding:16px">No purchase transaction rows for this CV.</div>';
+  const vatInputClass=isBalanced(g.vatDiff)?'money-input':'money-input ledger-alert-input';
+  const ewtInputClass=isBalanced(g.ewtDiff)?'money-input':'money-input ledger-alert-input';
+  const cards=sortWorkingTransactions(g.txns).map(t=>{
+    const reviewReasons=transactionReviewReasons(t);
+    const reviewTitle=reviewTitleFromReasons(reviewReasons);
+    return `<div class="verification-card${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
+    <div class="verification-card-head">
+      <div><div class="field-label">Description</div><div class="readonly-desc">${esc(t.description||'--')}</div><div class="line-meta line-meta-grid"><span>Accounting Title: ${esc(t.accountingTitle||'--')}</span><span>Bank Account: ${esc(t.bankAccount||'--')}</span></div></div>
+      <div class="action-buttons verification-actions-right"><span class="autosave-status" id="wp_autosave_${attr(t._id)}">Auto-save</span><button class="btn btn-small btn-danger wp-remove" data-id="${attr(t._id)}">Remove</button></div>
+    </div>
+    <div class="verification-line">
+      <div class="verification-section section-supplier">
+        <div class="verification-section-title">Supplier details</div>
+        <div class="compact-grid">
+          <div class="compact-field"><label>TIN</label><input class="edit-input tin-auto wp-autosave" id="wp_tin_${attr(t._id)}" data-id="${attr(t._id)}" value="${attr(t.tin)}" placeholder="TIN"/><div class="lookup-meta" id="wp_lookup_${attr(t._id)}">${findSupplierByTIN(t.tin)?'<span class="lookup-hit">Auto-matched</span>':(t.tin?'<span class="lookup-miss">No Supplier Master match</span>':'<span class="muted">Enter TIN to auto-fill</span>')}</div></div>
+          <div class="compact-field"><label>Registered Name</label><input class="wide-input wp-autosave supplier-detail-input${specialFieldClass(t.supplier)}" data-id="${attr(t._id)}" id="wp_supplier_${attr(t._id)}" value="${attr(t.supplier)}" placeholder="Auto-filled from TIN" ${t.supplierManualOverride?'':'readonly'}/></div>
+          <div class="compact-field span-2"><label>Address</label><input class="wide-input full-address-input${(supplierFieldHasSpecial(t.address)||supplierFieldHasSpecial(t.city)||supplierFieldHasSpecial(t.zip))?' special-review-field':''}" id="wp_full_address_${attr(t._id)}" value="${attr(supplierLookupSummary(t))}" placeholder="Auto-filled address, city, ZIP" readonly/></div>
+          ${supplierSpecialWarningHtml(t)}
+          <input type="hidden" id="wp_supplier_manual_${attr(t._id)}" value="${t.supplierManualOverride?'1':'0'}"/>
+          <div class="supplier-manual-panel ${t.supplierManualOverride?'visible':''}" id="wp_supplier_panel_${attr(t._id)}"><div class="supplier-manual-note">Manual intervention stores these fields separately for future DAT/SLP references. TIN is not checked for special characters.</div><div class="compact-grid"><div class="compact-field"><label>Registered Address</label><input class="edit-input wp-autosave${specialFieldClass(t.address)}" data-id="${attr(t._id)}" id="wp_address_${attr(t._id)}" value="${attr(t.address)}" ${t.supplierManualOverride?'':'readonly'} oninput="refreshSupplierFullAddress('${attr(t._id)}')"/></div><div class="compact-field"><label>City</label><input class="edit-input wp-autosave${specialFieldClass(t.city)}" data-id="${attr(t._id)}" id="wp_city_${attr(t._id)}" value="${attr(t.city)}" ${t.supplierManualOverride?'':'readonly'} oninput="refreshSupplierFullAddress('${attr(t._id)}')"/></div><div class="compact-field"><label>ZIP</label><input class="edit-input wp-autosave${specialFieldClass(t.zip)}" data-id="${attr(t._id)}" id="wp_zip_${attr(t._id)}" value="${attr(t.zip)}" ${t.supplierManualOverride?'':'readonly'} oninput="refreshSupplierFullAddress('${attr(t._id)}')"/></div></div></div>
+        </div>
+      </div>
+      <div class="verification-section section-tax">
+        <div class="verification-section-title">Invoice and codes</div>
+        <div class="compact-grid">
+          <div class="compact-field"><label>Invoice Number</label><input class="edit-input wp-autosave" data-id="${attr(t._id)}" id="wp_inv_${attr(t._id)}" value="${attr(t.inv)}" placeholder="Invoice no."/></div>
+          <div class="compact-field"><label>VAT Category</label>${vatCategorySelect(t)}</div>
+          <div class="compact-field span-2"><label>ATC Code and Rate</label>${atcCodeSelect(t)}<div class="lookup-meta mono">Rate: ${esc(atcRateText(t.atcCode))}</div></div>
+        </div>
+      </div>
+      <div class="verification-section section-amounts">
+        <div class="verification-section-title">Computed amounts</div>
+        <div class="compact-grid">
+          <div class="compact-field"><label>Amount</label><input class="money-input wp-autosave" data-id="${attr(t._id)}" id="wp_amount_${attr(t._id)}" value="${attr(money(transactionAmount(t)))}"/></div>
+          <div class="compact-field"><label>Computed VAT</label><input class="${vatInputClass}" id="wp_vat_${attr(t._id)}" value="${attr(money(t.vat))}" readonly/></div>
+          <div class="compact-field"><label>Total</label><input class="money-input wp-autosave" data-id="${attr(t._id)}" id="wp_total_${attr(t._id)}" value="${attr(money(t.total))}"/></div>
+          <div class="compact-field"><label>Computed EWT</label><input class="${(ewtInputClass+(ewtRateMismatch(t)?' ledger-alert-input':''))}" id="wp_ewt_${attr(t._id)}" value="${attr(money(t.ewtAmount))}" readonly/></div>
+        </div>
+      </div>
+      <div class="verification-section section-verification">
+        <div class="verification-section-title">Verification</div>
+        <div class="compact-grid">
+          <div class="compact-field"><label>Status</label>${verificationSelect(t)}</div>
+          <div class="compact-field compact-note"><label>Notes</label><input class="note-input wp-autosave" data-id="${attr(t._id)}" id="wp_note_${attr(t._id)}" value="${attr(t.reviewNote)}" placeholder="Verification note"/></div>
+        </div>
+      </div>
+    </div>
+  </div>`}).join('');
+  return `<div class="verification-card-list">${cards}</div>`;
+}
+
+function addSupplierLine(cv){const base=transactions.find(t=>(t.cv||'(No CV Number)')===cv)||{};const voucherName=base.voucherName||cv;transactions.push(normalizeTransaction({_id:makeId('tx'),voucherName,cv:base.cv||cv,date:base.date||'--',description:'Supplier line for '+voucherName,amount:0,vatable:0,nonVatable:0,vat:0,total:0,ewtAmount:0,atcCode:'',manualStatus:'unreviewed',reviewNote:'Added during verification'}));openCVs.add(cv);saveAll();renderAll();showToast('Supplier line added. Fill in supplier, TIN, invoice, and amounts.')}
+const tinLookupTimers={};
+function autoLookupSupplierForRow(id,silent=true){const rawTin=getValue('wp_tin_'+id);const normalized=normalizeTIN(rawTin);const statusEl=document.getElementById('wp_lookup_'+id);if(!normalized){if(statusEl)statusEl.innerHTML='<span class="muted">Enter TIN to auto-fill</span>';const manual=getValue('wp_supplier_manual_'+id)==='1';if(!manual){setValue('wp_supplier_'+id,'');setValue('wp_address_'+id,'');setValue('wp_city_'+id,'');setValue('wp_zip_'+id,'')}setValue('wp_full_address_'+id,'');return false}const s=findSupplierByTIN(rawTin);if(!s){if(statusEl)statusEl.innerHTML='<span class="lookup-miss">No Supplier Master match</span>';setValue('wp_full_address_'+id,supplierLookupSummary({address:getValue('wp_address_'+id),city:getValue('wp_city_'+id),zip:getValue('wp_zip_'+id)}));if(!silent)showToast('No supplier found for this TIN. Add it in Master Data → Supplier Master first.');return false}setValue('wp_supplier_manual_'+id,'0');const panel=document.getElementById('wp_supplier_panel_'+id);if(panel)panel.classList.remove('visible');setValue('wp_tin_'+id,s.tin);setValue('wp_supplier_'+id,supplierDisplayName(s));setValue('wp_address_'+id,s.address);setValue('wp_city_'+id,s.city);setValue('wp_zip_'+id,s.zip);setValue('wp_full_address_'+id,supplierLookupSummary({address:s.address,city:s.city,zip:s.zip}));['wp_supplier_'+id,'wp_address_'+id,'wp_city_'+id,'wp_zip_'+id].forEach(fid=>{const el=document.getElementById(fid);if(el)el.setAttribute('readonly','readonly')});if(statusEl)statusEl.innerHTML='<span class="lookup-hit">Auto-matched Supplier Master</span>';if(!silent)showToast('Supplier details auto-filled from Supplier Master.');return true}
+function queueSupplierLookupForRow(id){clearTimeout(tinLookupTimers[id]);tinLookupTimers[id]=setTimeout(()=>{if(normalizeTIN(getValue('wp_tin_'+id)).length>=9)autoLookupSupplierForRow(id,true)},350)}
+const workingAutoSaveTimers={};
+function setAutoSaveStatus(id,msg,type=''){
+  const el=document.getElementById('wp_autosave_'+id);
+  if(!el)return;
+  el.textContent=msg;
+  el.className='autosave-status'+(type?' '+type:'');
+}
+function queueAutoSaveWorkingRow(id,delay=450){
+  clearTimeout(workingAutoSaveTimers[id]);
+  setAutoSaveStatus(id,'Saving...','warn');
+  workingAutoSaveTimers[id]=setTimeout(()=>autoSaveWorkingRow(id),delay);
+}
+function autoSaveWorkingRow(id){
+  const ok=saveWorkingRow(id,{silent:true});
+  if(ok)setTimeout(()=>setAutoSaveStatus(id,'Saved','saved'),0);
+  else setTimeout(()=>setAutoSaveStatus(id,'Needs review','err'),0);
+}
+function fieldExists(id){return !!document.getElementById(id)}
+function getValueOrFallback(id,fallback=''){const el=document.getElementById(id);return el?String(el.value??'').trim():String(fallback??'').trim()}
+function getMoneyOrFallback(id,fallback=0){const el=document.getElementById(id);return el?parseMoney(el.value):Number(fallback||0)}
+function updateWorkingTaxPreview(id){
+  const amount=getMoneyOrFallback('wp_amount_'+id,0);
+  const vatCategory=normalizeVATCategory(getValueOrFallback('wp_vatcat_'+id,''));
+  const vat=computeVATFromCategory(taxableBaseFromAmount(amount,vatCategory),vatCategory);
+  const atcCode=normalizeATC(getValueOrFallback('wp_atc_'+id,''));
+  const ewt=expectedEwtAmount({amount,atcCode});
+  setValue('wp_vat_'+id,money(vat));
+  setValue('wp_ewt_'+id,money(ewt));
+  const totalEl=document.getElementById('wp_total_'+id);
+  if(totalEl&&String(totalEl.value||'').trim()==='')setValue('wp_total_'+id,money(amount+vat));
+}
+function saveWorkingRow(id,opts={}){
+  const silent=!!opts.silent;
+  const notify=msg=>{if(!silent)showToast(msg)};
+  const index=transactions.findIndex(t=>t._id===id);
+  if(index<0){notify('Transaction not found.');return false}
+  const existing=transactions[index]||{};
+  const inv=getValueOrFallback('wp_inv_'+id,existing.inv);
+  let supplier=getValueOrFallback('wp_supplier_'+id,existing.supplier);
+  let tin=getValueOrFallback('wp_tin_'+id,existing.tin);
+  const manualOverride=getValueOrFallback('wp_supplier_manual_'+id,existing.supplierManualOverride?'1':'0')==='1';
+  const rowMaster=tin?findSupplierByTIN(tin):null;
+  if(tin&&rowMaster&&!manualOverride){
+    autoLookupSupplierForRow(id,true);
+    supplier=getValueOrFallback('wp_supplier_'+id,supplier);
+    tin=getValueOrFallback('wp_tin_'+id,tin);
+  }else if(tin&&!rowMaster){
+    const statusEl=document.getElementById('wp_lookup_'+id);
+    if(statusEl)statusEl.innerHTML='<span class="lookup-miss">No Supplier Master match</span>';
+    notify('No supplier found for this TIN. Add it in Master Data → Supplier Master first.');
+  }
+  const status=parseVerification(getValueOrFallback('wp_status_'+id,existing.manualStatus));
+  const rawAtc=getValueOrFallback('wp_atc_'+id,existing.atcCode);
+  const atcCode=normalizeATC(rawAtc);
+  if(rawAtc&&!atcCode){notify('ATC Code must use the format WC 160 or WI 160.');return false}
+  if(status==='ok'&&(!inv||!supplier||!tin)){notify('For Compliant, fill in Registered supplier, TIN, and invoice number.');return false}
+  const amount=getMoneyOrFallback('wp_amount_'+id,transactionAmount(existing));
+  const vatCategory=normalizeVATCategory(getValueOrFallback('wp_vatcat_'+id,existing.vatCategory));
+  const vatable=taxableBaseFromAmount(amount,vatCategory);
+  const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
+  const vat=computeVATFromCategory(vatable,vatCategory);
+  let total=getMoneyOrFallback('wp_total_'+id,existing.total);
+  if(!total)total=amount+vat;
+  const master=findSupplierByTIN(tin);
+  const base={...existing,supplier,tin,inv,description:existing.description,accountingTitle:existing.accountingTitle,bankAccount:existing.bankAccount,amount,vatable,nonVatable,vatCategory,vat,total,ewtAmount:expectedEwtAmount({amount,atcCode}),atcCode,manualStatus:status,reviewNote:getValueOrFallback('wp_note_'+id,existing.reviewNote),lastReviewed:new Date().toISOString(),address:getValueOrFallback('wp_address_'+id,existing.address),city:getValueOrFallback('wp_city_'+id,existing.city),zip:getValueOrFallback('wp_zip_'+id,existing.zip),supplierManualOverride:manualOverride};
+  transactions[index]=(master&&!manualOverride)?applySupplierToTransaction(base,master):normalizeTransaction(base);
+  saveAll();
+  updateWorkingTaxPreview(id);
+  if(!silent)renderAll();
+  notify((master&&!manualOverride)?'Verification saved with Supplier Master details.':'Verification saved.');
+  return true
+}
+function removeTransaction(id){transactions=transactions.filter(t=>t._id!==id);saveAll();renderAll();showToast('Transaction removed.')}
+function ledgerRowsByCV(type){const rows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();const groups=buildCVGroups();const byCv=new Map(groups.map(g=>[g.cv,g]));const search=(document.getElementById(type+'Search')?.value||'').toLowerCase();const filter=(document.getElementById(type+'BalanceFilter')?.value||'');const map=new Map();rows.forEach(r=>{const cv=r.cv||'(No CV Number)';if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const g=map.get(cv);g.rows.push(r);g.ledgerAmount+=r.amount});byCv.forEach((g,cv)=>{if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const item=map.get(cv);item.purchaseAmount=type==='vat'?g.bookVat:g.bookEwt;item.diff=item.purchaseAmount-item.ledgerAmount});let result=[...map.values()];result.forEach(item=>{item.diff=item.purchaseAmount-item.ledgerAmount;item.suppliers=compactList(item.rows.map(r=>r.supplier).concat((byCv.get(item.cv)?.txns||[]).map(t=>t.voucherName||t.supplier)));item.status=isBalanced(item.diff)?'balanced':'unbalanced'});if(search)result=result.filter(item=>String(item.cv).toLowerCase().includes(search)||String(item.suppliers).toLowerCase().includes(search)||item.rows.some(r=>ledgerSearchMatch(r,search)));if(filter)result=result.filter(item=>item.status===filter);return result.sort((a,b)=>String(a.cv).localeCompare(String(b.cv)))}
+function renderLedgerSheet(type){const rows=ledgerRowsByCV(type);const allRows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();const tx=visibleTransactionsForMonth();const purchaseTotal=tx.reduce((a,t)=>a+(type==='vat'?t.vat:t.ewtAmount),0);const ledgerTotal=allRows.reduce((a,r)=>a+r.amount,0);const diff=purchaseTotal-ledgerTotal;const prefix=type==='vat'?'vat':'ewt';document.getElementById(prefix+'Metrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${rows.length}</div><div class="metric-sub">${allRows.length} uploaded balance rows</div></div><div class="metric"><div class="metric-label">Purchase ${type.toUpperCase()}</div><div class="metric-value" style="font-size:16px">${peso(purchaseTotal)}</div><div class="metric-sub">from Purchase Transactions</div></div><div class="metric"><div class="metric-label">${type.toUpperCase()} Balance</div><div class="metric-value" style="font-size:16px">${peso(ledgerTotal)}</div><div class="metric-sub">from Online Book ledger upload</div></div><div class="metric ${isBalanced(diff)?'ok':'err'}"><div class="metric-label">Difference</div><div class="metric-value" style="font-size:16px">${peso(diff)}</div><div class="metric-sub">vs uploaded ledger balance</div></div><div class="metric err"><div class="metric-label">Not Balanced</div><div class="metric-value">${rows.filter(r=>!isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div><div class="metric ok"><div class="metric-label">Balanced</div><div class="metric-value">${rows.filter(r=>isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div>`;document.getElementById(prefix+'Thead').innerHTML=`<tr><th style="width:15%">CV Number</th><th style="width:22%">Supplier / voucher</th><th class="num" style="width:12%">Purchase ${type.toUpperCase()}</th><th class="num" style="width:12%">Uploaded Balance</th><th class="num" style="width:12%">Difference</th><th style="width:11%">Status</th><th style="width:10%">Ledger rows</th><th style="width:16%">References</th></tr>`;const tbody=document.getElementById(prefix+'Tbody'),tfoot=document.getElementById(prefix+'Tfoot');tbody.innerHTML='';if(!rows.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state">No balance rows match your filters.</div></td></tr>';tfoot.innerHTML='';return}rows.forEach(item=>{const refs=compactList(item.rows.map(r=>r.ref), '--');const tr=document.createElement('tr');tr.innerHTML=`<td class="mono">${esc(item.cv)}</td><td>${esc(item.suppliers)}</td><td class="num">${peso(item.purchaseAmount)}</td><td class="num">${peso(item.ledgerAmount)}</td><td class="num">${varianceBadge(item.diff)}</td><td>${item.status==='balanced'?badge('ok','Balanced'):badge('err','Not balanced')}</td><td>${item.rows.length}</td><td class="mono">${esc(refs)}</td>`;tbody.appendChild(tr);item.rows.forEach(r=>{const detail=document.createElement('tr');detail.innerHTML=`<td></td><td>${esc(r.supplier||'--')}</td><td></td><td class="num">${peso(r.amount)}</td><td></td><td></td><td>${esc(r.account||'--')}</td><td class="mono">${esc(r.ref||'--')}</td>`;tbody.appendChild(detail)})});tfoot.innerHTML=`<tr><td colspan="2">Grand total</td><td class="num">${peso(purchaseTotal)}</td><td class="num">${peso(ledgerTotal)}</td><td class="num">${varianceBadge(diff)}</td><td colspan="3"></td></tr>`}
+function renderVatBalances(){renderLedgerSheet('vat')}
+function renderEwtBalances(){renderLedgerSheet('ewt')}
+
+function dedupeVatCategories(){const map=new Map();VAT_CATEGORIES.map(normalizeVatCategoryMaster).filter(c=>c.code).forEach(c=>map.set(c.code,c));VAT_CATEGORIES=[...map.values()].sort((a,b)=>a.code.localeCompare(b.code))}
+function dedupeAtcMaster(){const map=new Map();atcMaster.map(normalizeAtcMaster).filter(a=>normalizeATC(a.atcCode)).forEach(a=>map.set(normalizeATC(a.atcCode),a));atcMaster=[...map.values()].sort((a,b)=>atcText(a.atcCode).localeCompare(atcText(b.atcCode)))}
+function addVatCategoryManual(){const code=normalizeVatCodeRaw(getValue('mc_vat_code'));if(!code){showToast('Enter a valid VAT Category code.');return}const label=getValue('mc_vat_label');if(!label){showToast('Enter the VAT Category description.');return}const rate=getValue('mc_vat_rate');const row=normalizeVatCategoryMaster({code,label,kind:getValue('mc_vat_kind'),rate});VAT_CATEGORIES=VAT_CATEGORIES.filter(c=>c.code!==row.code).concat(row);dedupeVatCategories();saveAll();renderAll();['mc_vat_code','mc_vat_label','mc_vat_rate'].forEach(id=>setValue(id,''));showToast('VAT Category saved.')}
+function addAtcMasterManual(){const atcCode=normalizeATC(getValue('mc_atc_code'));if(!atcCode){showToast('ATC Code must use the format WC 160 or WI 160.');return}const rate=parseRate(getValue('mc_atc_rate'));if(rate===null){showToast('Enter the EWT rate percentage.');return}const row=normalizeAtcMaster({atcCode,rate,description:getValue('mc_atc_desc'),source:getValue('mc_atc_source')});atcMaster=atcMaster.filter(a=>normalizeATC(a.atcCode)!==row.atcCode).concat(row);dedupeAtcMaster();transactions=transactions.map(normalizeTransaction);saveAll();renderAll();['mc_atc_code','mc_atc_rate','mc_atc_desc','mc_atc_source'].forEach(id=>setValue(id,''));showToast('ATC Code saved.')}
+function addSupplierMasterManual(){const tin=getValue('mc_sup_tin');if(!normalizeTIN(tin)){showToast('Enter the supplier TIN.');return}const row=normalizeSupplier({tin,registeredName:getValue('mc_sup_registered'),lastName:getValue('mc_sup_last'),firstName:getValue('mc_sup_first'),middleName:getValue('mc_sup_middle'),address:getValue('mc_sup_address'),city:getValue('mc_sup_city'),zip:getValue('mc_sup_zip')});supplierMaster=supplierMaster.filter(s=>normalizeTIN(s.tin)!==normalizeTIN(row.tin)).concat(row);dedupeSupplierMaster();saveAll();renderAll();['mc_sup_tin','mc_sup_registered','mc_sup_last','mc_sup_first','mc_sup_middle','mc_sup_address','mc_sup_city','mc_sup_zip'].forEach(id=>setValue(id,''));showToast('Supplier Master record saved.')} 
+function removeVatCategory(code){VAT_CATEGORIES=VAT_CATEGORIES.filter(c=>c.code!==code);saveAll();renderAll();showToast('VAT Category removed.')} 
+function removeAtcMaster(code){const c=normalizeATC(code);atcMaster=atcMaster.filter(a=>normalizeATC(a.atcCode)!==c);saveAll();renderAll();showToast('ATC Code removed.')} 
+function removeSupplierMaster(tin){const n=normalizeTIN(tin);supplierMaster=supplierMaster.filter(s=>normalizeTIN(s.tin)!==n);saveAll();renderAll();showToast('Supplier Master record removed.')}
+
+function dedupeSupplierMaster(){const map=new Map();supplierMaster.map(normalizeSupplier).forEach(s=>{if(normalizeTIN(s.tin))map.set(normalizeTIN(s.tin),s)});supplierMaster=[...map.values()].sort((a,b)=>supplierDisplayName(a).localeCompare(supplierDisplayName(b))||a.tin.localeCompare(b.tin))}
+function renderSuppliers(){dedupeSupplierMaster();const el=document.getElementById('supplierMetrics');if(el)el.innerHTML='';const search=(document.getElementById('supplierSearch')?.value||'').toLowerCase();let rows=supplierMaster;if(search)rows=rows.filter(s=>[s.tin,s.registeredName,s.lastName,s.firstName,s.middleName,s.address,s.city,s.zip].some(v=>String(v||'').toLowerCase().includes(search)));document.getElementById('supplierThead').innerHTML='<tr><th style="width:12%">TIN</th><th style="width:17%">Registered Name</th><th style="width:11%">Last Name</th><th style="width:11%">First Name</th><th style="width:10%">Middle Name</th><th style="width:18%">Registered Address</th><th style="width:8%">City</th><th style="width:6%">ZIP Code</th><th style="width:7%">Review</th><th style="width:7%">Action</th></tr>';const tbody=document.getElementById('supplierTbody'),tfoot=document.getElementById('supplierTfoot');tbody.innerHTML='';if(!rows.length){tbody.innerHTML='<tr><td colspan="10"><div class="empty-state">No supplier master rows match your search.</div></td></tr>';tfoot.innerHTML='';return}let flagged=0;rows.forEach(s=>{const issues=supplierSpecialIssues(s);if(issues.length)flagged++;const tr=document.createElement('tr');tr.innerHTML=`<td class="mono">${esc(s.tin)}</td>${supplierSpecialCell(s.registeredName)}${supplierSpecialCell(s.lastName)}${supplierSpecialCell(s.firstName)}${supplierSpecialCell(s.middleName)}${supplierSpecialCell(s.address)}${supplierSpecialCell(s.city)}${supplierSpecialCell(s.zip)}<td>${issues.length?badge('warn','Review'):'--'}</td><td><div class="action-buttons"><button class="btn btn-small" onclick="loadSupplierMasterForEdit('${attr(s.tin)}')">Edit</button><button class="btn btn-small btn-danger" onclick="removeSupplierMaster('${attr(s.tin)}')">Remove</button></div></td>`;tbody.appendChild(tr)});tfoot.innerHTML=`<tr><td colspan="10">${rows.length} supplier master record(s) shown. ${flagged?flagged+' record(s) need special character review.':'No supplier detail special character warnings.'}</td></tr>`}
+
+function renderAtcMaster(){dedupeAtcMaster();const el=document.getElementById('atcMetrics');if(el)el.innerHTML='';const search=(document.getElementById('atcSearch')?.value||'').toLowerCase();let rows=atcMaster;if(search)rows=rows.filter(a=>[a.atcCode,a.description,a.source].some(v=>String(v||'').toLowerCase().includes(search)));document.getElementById('atcThead').innerHTML='<tr><th style="width:16%">ATC Code</th><th class="num" style="width:14%">EWT Rate</th><th style="width:44%">Description / nature of payment</th><th style="width:18%">Source / reference</th><th style="width:8%">Action</th></tr>';const tbody=document.getElementById('atcTbody'),tfoot=document.getElementById('atcTfoot');tbody.innerHTML='';if(!rows.length){tbody.innerHTML='<tr><td colspan="5"><div class="empty-state">No ATC master rows match your filters.</div></td></tr>';tfoot.innerHTML='';return}rows.forEach(a=>{const tr=document.createElement('tr');tr.innerHTML=`<td class="mono">${esc(atcText(a.atcCode))}</td><td class="num">${a.rate===null?'--':esc(String(a.rate))+'%'}</td><td>${esc(a.description||'--')}</td><td>${esc(a.source||'--')}</td><td><button class="btn btn-small btn-danger" onclick="removeAtcMaster('${attr(a.atcCode)}')">Remove</button></td>`;tbody.appendChild(tr)});tfoot.innerHTML=`<tr><td colspan="5">${rows.length} ATC master row(s) shown.</td></tr>`}
+
+function renderVatCategories(){dedupeVatCategories();const el=document.getElementById('vatCategoryMetrics');if(el)el.innerHTML='';const search=(document.getElementById('vatCategorySearch')?.value||'').toLowerCase();let rows=VAT_CATEGORIES;if(search)rows=rows.filter(c=>[c.code,c.label,c.kind].some(v=>String(v||'').toLowerCase().includes(search)));document.getElementById('vatCategoryThead').innerHTML='<tr><th style="width:14%">VAT Category</th><th style="width:42%">Description</th><th style="width:22%">VAT Type</th><th class="num" style="width:12%">VAT Rate</th><th style="width:10%">Action</th></tr>';const tbody=document.getElementById('vatCategoryTbody'),tfoot=document.getElementById('vatCategoryTfoot');tbody.innerHTML='';if(!rows.length){tbody.innerHTML='<tr><td colspan="5"><div class="empty-state">No VAT Category rows match your search.</div></td></tr>';tfoot.innerHTML='';return}rows.forEach(c=>{const tr=document.createElement('tr');tr.innerHTML=`<td class="mono">${esc(c.code)}</td><td>${esc(c.label||'--')}</td><td>${esc(Number(c.rate||0)>0?'VAT Registered':'Not VAT Registered')}</td><td class="num">${fmt(c.rate)}%</td><td><button class="btn btn-small btn-danger" onclick="removeVatCategory('${attr(c.code)}')">Remove</button></td>`;tbody.appendChild(tr)});tfoot.innerHTML=`<tr><td colspan="5">VAT Category Codes decide whether Amount is vatable or non-vatable and compute VAT using the configured rate.</td></tr>`}
+
+function exportVatCategoriesXLSX(){const rows=[['VAT Category','Description','VAT Type','VAT Rate']];VAT_CATEGORIES.forEach(c=>rows.push([c.code,c.label,Number(c.rate||0)>0?'VAT Registered':'Not VAT Registered',c.rate]));downloadXLSX(rows,'vat_categories_export.xlsx','VAT Categories');showToast('VAT Categories export downloaded.')}
+
+function exportAtcMasterXLSX(){const rows=[['ATC Code','EWT Rate','Description','Database Reference']];atcMaster.map(normalizeAtcMaster).forEach(a=>rows.push([atcText(a.atcCode),a.rate===null?'':a.rate,a.description,a.source]));downloadXLSX(rows,'atc_master_export.xlsx','ATC Master');showToast('ATC Master export downloaded.')}
+
+function exportSupplierXLSX(){const rows=[['TIN','Registered Name','Registered Last Name','Registered First Name','Registered Middle Name','Registered Address','City','ZIP Code']];supplierMaster.map(normalizeSupplier).forEach(s=>rows.push([s.tin,s.registeredName,s.lastName,s.firstName,s.middleName,s.address,s.city,s.zip]));downloadXLSX(rows,'supplier_master_export.xlsx','Supplier Master');showToast('Supplier Master export downloaded.')}
+function safeDashboardRender(fnName){try{if(typeof window[fnName]==='function')window[fnName]()}catch(err){console.error('Render failed:',fnName,err);if(fnName==='renderBirCompliance')renderBirFallback(err)}}
+function renderAll(){['renderMonthTabs','renderSummary','renderWorking','renderVatBalances','renderEwtBalances','renderBirCompliance','renderVatCategories','renderAtcMaster','renderSuppliers'].forEach(safeDashboardRender);try{populateAddAtcDropdown()}catch(err){console.error('Render failed: populateAddAtcDropdown',err)}try{updateActionButtons()}catch(err){console.error('Render failed: updateActionButtons',err)}}
+
+
+function slpExcelPeriodEndDate(){
+  const period=slpPeriodInfo();
+  const [mm,dd,yyyy]=period.date.split('/').map(v=>Number(v));
+  return new Date(yyyy,mm-1,dd);
+}
+function excelSerialFromDate(d){
+  const utc=Date.UTC(d.getFullYear(),d.getMonth(),d.getDate());
+  const epoch=Date.UTC(1899,11,30);
+  return Math.round((utc-epoch)/86400000);
+}
+function formatTin9Hyphen(value){
+  const tin=slpTin9(value);
+  return tin.length===9?`${tin.slice(0,3)}-${tin.slice(3,6)}-${tin.slice(6,9)}`:tin;
+}
+function slpExcelSourceRows(){
+  return birNonCashSourceRows();
+}
+function slpExcelSupplierAddress(t){
+  return [t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' ');
+}
+function slpExcelNameFields(t){
+  const parts=slpSupplierNameParts(t);
+  const individual=[parts.last,parts.first,parts.middle].filter(Boolean).join(', ');
+  return {
+    registeredName: parts.corp?parts.corp:'',
+    individualName: parts.corp?'':(individual||String(t.supplier||'').trim())
+  };
+}
+function hasVatCategoryCode(t){return Boolean(normalizeVATCategory(t?.vatCategory))}
+function hasAtcCode(t){return atcText(t?.atcCode)!=='--'}
+function hasTaxClassification(t){return hasVatCategoryCode(t)||hasAtcCode(t)}
+function birNonCashSourceRows(){
+  return visibleTransactionsForMonth().filter(t=>hasTaxClassification(t));
+}
+function birExcludedTaxClassificationRows(){
+  return visibleTransactionsForMonth().filter(t=>!hasTaxClassification(t));
+}
+function birRowsForReportValidation(report){
+  if(report==='cashBook')return birCashSourceRows();
+  if(report==='qapExcel'||report==='qapDat')return ewtSourceRows();
+  if(report==='slpExcel'||report==='slpDat')return slpExcelSourceRows();
+  return birSourceRows();
+}
+function slpExcelBucketRow(t,monthSerial){
+  const amount=transactionAmount(t);
+  const vat=Number(t.vat||0);
+  const b=slpDatAmountBuckets(t);
+  const taxable=b.services+b.capital+b.goods;
+  const grossTaxable=taxable+vat;
+  const names=slpExcelNameFields(t);
+  return [
+    monthSerial,
+    formatTin9Hyphen(t.tin),
+    names.registeredName,
+    names.individualName,
+    slpExcelSupplierAddress(t),
+    amount,
+    b.exempt,
+    b.zero,
+    taxable,
+    b.services,
+    b.capital,
+    b.goods,
+    vat,
+    grossTaxable
+  ];
+}
+function slpExcelRows(){
+  const period=slpPeriodInfo();
+  const monthEnd=slpExcelPeriodEndDate();
+  const monthSerial=excelSerialFromDate(monthEnd);
+  const rows=[
+    ['PURCHASE TRANSACTION','','','','','','','','','','','','',''],
+    ['RECONCILIATION OF LISTING FOR ENFORCEMENT','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','',''],
+    [`TIN : ${slpTin9(COMPANY_PROFILE.tin)}`,'','','','','','','','','','','','',''],
+    [`OWNER\'S NAME: ${COMPANY_PROFILE.registeredName}`,'','','','','','','','','','','','',''],
+    [`OWNER\'S TRADE NAME : ${COMPANY_PROFILE.tradeName}`,'','','','','','','','','','','','',''],
+    [`OWNER\'S ADDRESS:  ${[COMPANY_PROFILE.address,COMPANY_PROFILE.cityZip].filter(Boolean).join(' ')}`,'','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','',''],
+    ['TAXABLE','TAXPAYER','REGISTERED NAME','NAME OF SUPPLIER',"SUPPLIER'S ADDRESS",'AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF','AMOUNT OF'],
+    ['MONTH','IDENTIFICATION','','(Last Name, First Name, Middle Name)','','GROSS PURCHASE','EXEMPT PURCHASE','ZERO-RATED PURCHASE','TAXABLE PURCHASE','PURCHASE OF SERVICES','PURCHASE OF CAPITAL GOODS','PURCHASE OF GOODS OTHER THAN CAPITAL GOODS','INPUT TAX','GROSS TAXABLE PURCHASE'],
+    ['','NUMBER','','','','','','','','','','','',''],
+    ['(1)','(2)','(3)','(4)','(5)','(6)','(7)','(8)','(9)','(10)','(11)','(12)','(13)','(14)']
+  ];
+  const tx=slpExcelSourceRows();
+  const totals={gross:0,exempt:0,zero:0,taxable:0,services:0,capital:0,goods:0,inputVat:0,grossTaxable:0};
+  tx.forEach(t=>{
+    const row=slpExcelBucketRow(t,monthSerial);
+    rows.push(row);
+    totals.gross+=Number(row[5]||0);
+    totals.exempt+=Number(row[6]||0);
+    totals.zero+=Number(row[7]||0);
+    totals.taxable+=Number(row[8]||0);
+    totals.services+=Number(row[9]||0);
+    totals.capital+=Number(row[10]||0);
+    totals.goods+=Number(row[11]||0);
+    totals.inputVat+=Number(row[12]||0);
+    totals.grossTaxable+=Number(row[13]||0);
+  });
+  rows.push(['','','','','','','','','','','','','','']);
+  rows.push(['','','','','','','','','','','','','','']);
+  rows.push(['Grand Total :','','','','',totals.gross,totals.exempt,totals.zero,totals.taxable,totals.services,totals.capital,totals.goods,totals.inputVat,totals.grossTaxable]);
+  rows.push(['','','','','','','','','','','','','','']);
+  rows.push(['END OF REPORT','','','','','','','','','','','','','']);
+  return rows;
+}
+function showSLPExcelValidationIssues(issues){
+  const preview=issues.slice(0,12).map(i=>`• ${i.cv} / ${i.voucher} / ${i.invoice}: missing ${i.missing.join(', ')}`).join('\n');
+  const more=issues.length>12?`\n...and ${issues.length-12} more line(s).`:'';
+  alert(`Cannot export SLP Excel yet. Complete Supplier Master / verification details for every exported line first.\n\n${preview}${more}`);
+}
+function downloadSLPExcelWorkbook(rows,name){
+  if(!ensureXLSX())return;
+  const cleanRows=rows.map(r=>r.map(v=>v==null?'':v));
+  const ws=XLSX.utils.aoa_to_sheet(cleanRows);
+  ws['!cols']=[
+    {wch:12},{wch:16},{wch:38},{wch:38},{wch:54},{wch:16},{wch:16},{wch:18},{wch:18},{wch:20},{wch:22},{wch:34},{wch:16},{wch:22}
+  ];
+  ws['!merges']=[
+    {s:{r:0,c:0},e:{r:0,c:13}},
+    {s:{r:1,c:0},e:{r:1,c:13}},
+    {s:{r:5,c:0},e:{r:5,c:13}},
+    {s:{r:6,c:0},e:{r:6,c:13}},
+    {s:{r:7,c:0},e:{r:7,c:13}},
+    {s:{r:8,c:0},e:{r:8,c:13}}
+  ];
+  for(let r=14;r<cleanRows.length;r++){
+    const cell=ws[XLSX.utils.encode_cell({r,c:0})];
+    if(cell){cell.t='n';cell.z='m/d/yyyy'}
+    for(let c=5;c<=13;c++){
+      const moneyCell=ws[XLSX.utils.encode_cell({r,c})];
+      if(moneyCell)moneyCell.z='#,##0.00';
+    }
+  }
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Sheet1');
+  XLSX.writeFile(wb,name);
+}
+function exportSLPExcel(){
+  if(activeMonth==='all'){showToast('Select one month before exporting SLP Excel.');return}
+  const sourceRows=slpExcelSourceRows();
+  if(!sourceRows.length){showToast('No SLP Excel rows to export for '+activeMonthLabel()+'.');return}
+  const issues=validateSLPDatSourceRows(sourceRows);
+  if(issues.length){showSLPExcelValidationIssues(issues);return}
+  const rows=slpExcelRows();
+  const period=slpPeriodInfo();
+  const fileMonth=activeMonth.replace('-','_');
+  downloadSLPExcelWorkbook(rows,`${slpTin9(COMPANY_PROFILE.tin)}_SLP_PURCHASES_${fileMonth}.xlsx`);
+  showToast('Monthly SLP Excel exported for '+activeMonthLabel()+'.');
+}
+
+function slpDatQuote(value){const s=String(value??'').replace(/[\r\n]/g,' ').trim().toUpperCase();return s?`"${s.replace(/"/g,'""')}"`:''}
+function slpDatNum(value){const n=Number(value||0);return Number.isFinite(n)?n.toFixed(2):'0.00'}
+function slpTin9(value){return normalizeTIN(value).slice(0,9)}
+function slpSupplierNameParts(t){
+  const corp=String(t?.registeredName||t?.supplier||'').trim();
+  const last=String(t?.lastName||'').trim();
+  const first=String(t?.firstName||'').trim();
+  const middle=String(t?.middleName||'').trim();
+  return{corp,last,first,middle,hasName:Boolean(corp||last||first)};
+}
+function slpRegisteredName(t){
+  const parts=slpSupplierNameParts(t);
+  if(parts.corp)return parts.corp;
+  return [parts.last,parts.first,parts.middle].filter(Boolean).join(' ').trim();
+}
+function slpCityLine(t){return String(t?.city||'').trim()}
+function validateSLPDatSourceRows(rows){
+  const issues=[];
+  rows.forEach((t,idx)=>{
+    const missing=[];
+    const tin=slpTin9(t.tin);
+    const name=slpSupplierNameParts(t);
+    if(tin.length!==9)missing.push('9-digit supplier TIN');
+    if(!name.hasName)missing.push('supplier registered name or individual name');
+    if(!String(t.address||'').trim())missing.push('registered address');
+    if(!slpCityLine(t))missing.push('city');
+    if(missing.length){
+      issues.push({
+        row:idx+1,
+        cv:String(t.cv||'(No CV)').trim(),
+        voucher:String(t.voucherName||'(No voucher)').trim(),
+        invoice:String(t.inv||'(No invoice)').trim(),
+        missing
+      });
+    }
+  });
+  return issues;
+}
+function showSLPDatValidationIssues(issues){
+  const preview=issues.slice(0,12).map(i=>`• ${i.cv} / ${i.voucher} / ${i.invoice}: missing ${i.missing.join(', ')}`).join('\n');
+  const more=issues.length>12?`\n...and ${issues.length-12} more line(s).`:'';
+  alert(`Cannot export SLP DAT yet. Complete Supplier Master / verification details for every exported line first.\n\n${preview}${more}`);
+}
+function slpPeriodInfo(){
+  let year='',month='';
+  if(/^\d{4}-\d{2}$/.test(activeMonth)){year=activeMonth.slice(0,4);month=activeMonth.slice(5,7)}
+  if(!year||!month){const row=visibleTransactionsForMonth()[0]||transactions[0]||{};const info=monthInfoFromDate(row.date);if(/^\d{4}-\d{2}$/.test(info.key)){year=info.key.slice(0,4);month=info.key.slice(5,7)}}
+  if(!year||!month){const now=new Date();year=String(now.getFullYear());month=String(now.getMonth()+1).padStart(2,'0')}
+  const end=new Date(Number(year),Number(month),0);
+  const mm=String(end.getMonth()+1).padStart(2,'0');
+  const dd=String(end.getDate()).padStart(2,'0');
+  return{date:`${mm}/${dd}/${end.getFullYear()}`,token:`${mm}${end.getFullYear()}`};
+}
+function slpDatAmountBuckets(t){
+  const amount=transactionAmount(t),vat=Number(t.vat||0),cat=normalizeVATCategory(t.vatCategory);
+  const buckets={exempt:0,zero:0,services:0,capital:0,goods:0,inputVat:vat};
+  if(cat==='S')buckets.services=amount;
+  else if(cat==='CG')buckets.capital=amount;
+  else if(cat==='G'||cat==='I')buckets.goods=amount;
+  else if(cat==='SNQ'||cat==='GNQ'||!cat)buckets.exempt=amount;
+  return buckets;
+}
+function slpDatRows(){
+  const period=slpPeriodInfo();
+  const companyTin=slpTin9(COMPANY_PROFILE.tin);
+  const sourceRows=slpExcelSourceRows();
+  const validationIssues=validateSLPDatSourceRows(sourceRows);
+  if(validationIssues.length)return{lines:[],details:[],totals:null,period,companyTin,validationIssues};
+  const detailMap=new Map();
+  sourceRows.forEach(t=>{
+    const tin=slpTin9(t.tin);
+    const name=slpSupplierNameParts(t);
+    const corp=name.corp;
+    const last=name.last;
+    const first=name.first;
+    const middle=name.middle;
+    const address=String(t.address||'').trim();
+    const city=slpCityLine(t);
+    const key=[tin,corp,last,first,middle,address,city].join('|');
+    if(!detailMap.has(key))detailMap.set(key,{tin,corp,last,first,middle,address,city,exempt:0,zero:0,services:0,capital:0,goods:0,inputVat:0});
+    const item=detailMap.get(key);const b=slpDatAmountBuckets(t);
+    item.exempt+=b.exempt;item.zero+=b.zero;item.services+=b.services;item.capital+=b.capital;item.goods+=b.goods;item.inputVat+=b.inputVat;
+  });
+  const details=[...detailMap.values()].sort((a,b)=>(a.corp||a.last).localeCompare(b.corp||b.last)||a.tin.localeCompare(b.tin));
+  const totals=details.reduce((a,r)=>{a.exempt+=r.exempt;a.zero+=r.zero;a.services+=r.services;a.capital+=r.capital;a.goods+=r.goods;a.inputVat+=r.inputVat;return a},{exempt:0,zero:0,services:0,capital:0,goods:0,inputVat:0});
+  const header=['H',COMPANY_PROFILE.filingType,slpDatQuote(companyTin),slpDatQuote(COMPANY_PROFILE.registeredName),slpDatQuote(COMPANY_PROFILE.lastName),slpDatQuote(COMPANY_PROFILE.firstName),slpDatQuote(COMPANY_PROFILE.middleName),slpDatQuote(COMPANY_PROFILE.tradeName),slpDatQuote(COMPANY_PROFILE.address),slpDatQuote(COMPANY_PROFILE.cityZip),slpDatNum(totals.exempt),slpDatNum(totals.zero),slpDatNum(totals.services),slpDatNum(totals.capital),slpDatNum(totals.goods),slpDatNum(totals.inputVat),slpDatNum(totals.inputVat),slpDatNum(0),COMPANY_PROFILE.branchCode,period.date,COMPANY_PROFILE.taxRateCode].join(',');
+  const lines=[header];
+  details.forEach(r=>{lines.push(['D',COMPANY_PROFILE.filingType,slpDatQuote(r.tin),slpDatQuote(r.corp),slpDatQuote(r.last),slpDatQuote(r.first),slpDatQuote(r.middle),slpDatQuote(r.address),slpDatQuote(r.city),slpDatNum(r.exempt),slpDatNum(r.zero),slpDatNum(r.services),slpDatNum(r.capital),slpDatNum(r.goods),slpDatNum(r.inputVat),companyTin,period.date].join(','))});
+  return{lines,details,totals,period,companyTin,validationIssues:[]};
+}
+function exportSLPDAT(){
+  if(activeMonth==='all'){showToast('Select one month before exporting SLP DAT.');return}
+  const dat=slpDatRows();
+  if(dat.validationIssues&&dat.validationIssues.length){showSLPDatValidationIssues(dat.validationIssues);return}
+  if(dat.details.length===0){showToast('No SLP DAT detail rows to export for '+activeMonthLabel()+'.');return}
+  const text=dat.lines.join('\r\n')+'\r\n';
+  const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${dat.companyTin}P${dat.period.token}.DAT`;a.click();URL.revokeObjectURL(a.href);
+  showToast('SLP DAT exported with validated supplier details and 9-digit TINs.');
+}
+
+function requireSingleMonthForBIR(label){
+  if(activeMonth==='all'){
+    showToast('Select one month before exporting '+label+'.');
+    return false;
+  }
+  return true;
+}
+function birSourceRows(){return birNonCashSourceRows()}
+function birCashSourceRows(){return visibleTransactionsForMonth()}
+function ewtSourceRows(){return birNonCashSourceRows().filter(t=>hasAtcCode(t)||Number(t.ewtAmount||0)>0)}
+function birIssueKey(issue){return [issue.cv,issue.voucher,issue.invoice,issue.message].map(v=>String(v||'')).join('|')}
+function dedupeBirIssues(issues){const seen=new Set();return (issues||[]).filter(i=>{const key=birIssueKey(i);if(seen.has(key))return false;seen.add(key);return true;});}
+function birTransactionBlockersForReport(t,report){
+  const missing=[];
+  if(!String(t.date||'').trim()||String(t.date||'').trim()==='--')missing.push('date');
+  if(!String(t.cv||'').trim())missing.push('CV No.');
+  if(!String(t.voucherName||'').trim())missing.push('voucher name');
+  if(!(transactionAmount(t)>0))missing.push('amount');
+  const needsSupplier=report==='slpExcel'||report==='slpDat'||report==='qapExcel'||report==='qapDat'||report==='purchaseBook';
+  if(needsSupplier){
+    if(slpTin9(t.tin).length!==9)missing.push('9-digit supplier TIN');
+    if(!slpRegisteredName(t))missing.push('supplier registered name');
+  }
+  if(report==='slpExcel'||report==='slpDat'||report==='purchaseBook'){
+    if(!String(t.address||'').trim())missing.push('registered address');
+    if(!slpCityLine(t))missing.push('city');
+  }
+  if(report==='qapExcel'||report==='qapDat'){
+    if(hasAtcCode(t)||Number(t.ewtAmount||0)>0){
+      if(!hasAtcCode(t))missing.push('ATC Code');
+      if(atcRateForCode(t.atcCode)===null)missing.push('ATC Master rate');
+    }
+  }
+  if(report==='purchaseBook'){
+    if(!String(t.accountingTitle||'').trim())missing.push('COA title / accounting title');
+    if(!String(t.description||'').trim())missing.push('description');
+  }
+  if(report==='cashBook'){
+    if(!String(t.accountingTitle||'').trim())missing.push('accounting title');
+    if(!String(t.bankAccount||'').trim())missing.push('bank account');
+    if(!String(t.description||'').trim())missing.push('description');
+    if(!(Number(t.total||0)>0))missing.push('total amount');
+  }
+  return missing;
+}
+function birMonthWideBlockerIssues(report){
+  if(activeMonth==='all')return [birIssue('Period','All Months','',`Select one month before exporting ${birReportLabel(report)}.`)];
+  const rows=birRowsForReportValidation(report);
+  const issues=[];
+  rows.forEach(t=>{
+    const missing=birTransactionBlockersForReport(t,report);
+    if(missing.length)issues.push(birIssue(t.cv,t.voucherName,t.inv,'missing or unresolved '+missing.join(', ')));
+  });
+  return issues;
+}
+function qapPeriodText(){
+  const info=slpPeriodInfo();
+  return `${info.token.slice(0,2)}/${info.token.slice(2)}`;
+}
+function qapAtcCompact(code){return normalizeATC(code).replace(/\s+/g,'')}
+function qapTinBranch(value){
+  const digits=normalizeTIN(value);
+  if(digits.length>=13)return digits.slice(9,13);
+  if(digits.length>=12)return digits.slice(9,12).padStart(4,'0');
+  return '0000';
+}
+function qapCompanyBranch(){return qapTinBranch(COMPANY_PROFILE.tin)}
+function qapTextQuote(value){const s=String(value??'').replace(/[\r\n]/g,' ').trim().toUpperCase();return `"${s.replace(/"/g,'""')}"`}
+function qapDetailRows(){
+  const period=qapPeriodText();
+  const detailMap=new Map();
+  ewtSourceRows().forEach(t=>{
+    const names=slpSupplierNameParts(t);
+    const tin=slpTin9(t.tin);
+    const branch=qapTinBranch(t.tin);
+    const atc=qapAtcCompact(t.atcCode);
+    const rate=atcRateForCode(t.atcCode);
+    const key=[tin,branch,names.corp,names.last,names.first,names.middle,period,atc,rate===null?'':rate].join('|');
+    if(!detailMap.has(key))detailMap.set(key,{tin,branch,corp:names.corp,last:names.last,first:names.first,middle:names.middle,period,atc,rate:rate===null?0:rate,base:0,ewt:0,count:0});
+    const item=detailMap.get(key);
+    item.base+=transactionAmount(t);
+    item.ewt+=Number(t.ewtAmount||0);
+    item.count+=1;
+  });
+  return [...detailMap.values()].sort((a,b)=>(a.corp||a.last).localeCompare(b.corp||b.last)||a.tin.localeCompare(b.tin)||a.atc.localeCompare(b.atc));
+}
+function qapRows(){
+  const rows=[['Record Type','Form','Sequence','Supplier TIN','Supplier Branch Code','Corporation Name','Last Name','First Name','Middle Name','Period','ATC Code','Rate','Tax Base Amount','Tax Withheld / EWT','Source Lines']];
+  qapDetailRows().forEach((r,idx)=>rows.push(['D1','1601EQ',idx+1,r.tin,r.branch,r.corp,r.last,r.first,r.middle,r.period,r.atc,r.rate.toFixed(2),Number(r.base||0),Number(r.ewt||0),r.count]));
+  return rows;
+}
+function qapFullTin(tin,branch){
+  const base=formatTin9Hyphen(tin);
+  const b=String(branch||'0000').replace(/\D/g,'').padStart(4,'0').slice(0,4);
+  return base?`${base}-${b}`:b;
+}
+function qapNatureForCode(code){
+  const found=atcLookup(code);
+  return found&&found.description?found.description:'';
+}
+function qapExcelPeriodHeading(){
+  const d=slpExcelPeriodEndDate();
+  const month=d.toLocaleString('en-US',{month:'long'}).toUpperCase();
+  return `FOR THE MONTH ENDING ${month} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function qapExcelRows(){
+  const monthEnd=slpExcelPeriodEndDate();
+  const monthSerial=excelSerialFromDate(monthEnd);
+  const details=qapDetailRows();
+  const rows=[
+    ['Attachment to BIR Form 1601-EQ','','','','','','','','','','','','','','','','','','','',''],
+    ['MONTHLY ALPHABETICAL LIST OF PAYEES SUBJECTED TO EXPANDED WITHHOLDING TAX & PAYEES WHOSE INCOME PAYMENTS ARE EXEMPT','','','','','','','','','','','','','','','','','','','',''],
+    [qapExcelPeriodHeading(),'','','','','','','','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','','','','','','','','',''],
+    [`TIN : ${qapFullTin(slpTin9(COMPANY_PROFILE.tin),qapCompanyBranch())}`,'','','','','','','','','','','','','','','','','','','',''],
+    [`WITHHOLDING AGENT'S NAME: ${COMPANY_PROFILE.registeredName}`,'','','','','','','','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','','','','','','','','','','',''],
+    ['','','','','','','','','','','1ST MONTH OF THE QUARTER','','','2ND MONTH OF THE QUARTER','','','3RD MONTH OF THE QUARTER','','','TOTAL FOR THE QUARTER',''],
+    ['SEQ','TAXPAYER','CORPORATION','INDIVIDUAL','ATC CODE','NATURE OF PAYMENT','','','','','AMOUNT OF','TAX RATE','AMOUNT OF','AMOUNT OF','TAX RATE','AMOUNT OF','AMOUNT OF','TAX RATE','AMOUNT OF','TOTAL','TOTAL'],
+    ['NO','IDENTIFICATION','(Registered Name)','(Last Name, First Name, Middle Name)','','','','','','','INCOME PAYMENT','','TAX WITHHELD','INCOME PAYMENT','','TAX WITHHELD','INCOME PAYMENT','','TAX WITHHELD','INCOME PAYMENT','TAX WITHHELD'],
+    ['','NUMBER','','','','','','','','','','','','','','','','','','',''],
+    ['(1)','(2)','(3)','(4)','(5)','','','','','','(6)','(7)','(8)','(9)','(10)','(11)','(12)','(13)','(14)','(15)','(16)'],
+    ['------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------','------------------------------']
+  ];
+  const totals={base:0,ewt:0};
+  details.forEach((r,idx)=>{
+    const name=[r.last,r.first,r.middle].filter(Boolean).join(', ');
+    const base=Number(r.base||0);
+    const ewt=Number(r.ewt||0);
+    const rate=Number(r.rate||0);
+    totals.base+=base; totals.ewt+=ewt;
+    rows.push([
+      idx+1,
+      qapFullTin(r.tin,r.branch),
+      r.corp||'',
+      r.corp?'':name,
+      r.atc,
+      qapNatureForCode(r.atc),
+      monthSerial,
+      base,
+      rate,
+      ewt,
+      base,
+      rate,
+      ewt,
+      0,0,0,
+      0,0,0,
+      base,
+      ewt
+    ]);
+  });
+  rows.push(['','','','','','','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------','------------------']);
+  rows.push(['Grand Total :','','','','','',monthSerial,totals.base,'',totals.ewt,totals.base,'',totals.ewt,0,'',0,0,'',0,totals.base,totals.ewt]);
+  return rows;
+}
+function downloadQAPExcelWorkbook(rows,name){
+  if(!ensureXLSX())return;
+  const cleanRows=rows.map(r=>r.map(v=>v==null?'':v));
+  const ws=XLSX.utils.aoa_to_sheet(cleanRows);
+  ws['!cols']=[
+    {wch:8},{wch:20},{wch:42},{wch:42},{wch:12},{wch:62},
+    {wch:12},{wch:16},{wch:10},{wch:16},{wch:16},{wch:10},{wch:16},
+    {wch:16},{wch:10},{wch:16},{wch:16},{wch:10},{wch:16},{wch:18},{wch:18}
+  ];
+  ws['!merges']=[
+    {s:{r:0,c:0},e:{r:0,c:20}},
+    {s:{r:1,c:0},e:{r:1,c:20}},
+    {s:{r:2,c:0},e:{r:2,c:20}},
+    {s:{r:5,c:0},e:{r:5,c:20}},
+    {s:{r:6,c:0},e:{r:6,c:20}}
+  ];
+  const moneyCols=[7,9,10,12,13,15,16,18,19,20];
+  const rateCols=[8,11,14,17];
+  for(let r=15;r<cleanRows.length;r++){
+    const dateCell=ws[XLSX.utils.encode_cell({r,c:6})];
+    if(dateCell&&typeof dateCell.v==='number'){dateCell.t='n';dateCell.z='m/d/yyyy'}
+    moneyCols.forEach(c=>{const cell=ws[XLSX.utils.encode_cell({r,c})];if(cell&&cell.v!==''&&typeof cell.v==='number')cell.z='#,##0.00'});
+    rateCols.forEach(c=>{const cell=ws[XLSX.utils.encode_cell({r,c})];if(cell&&cell.v!==''&&typeof cell.v==='number')cell.z='0.00'});
+  }
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'QAP 1601EQ Schedule 1');
+  XLSX.writeFile(wb,name);
+}
+function qapDatLines(){
+  const period=slpPeriodInfo();
+  const companyTin=slpTin9(COMPANY_PROFILE.tin);
+  const companyBranch=qapCompanyBranch();
+  const qapPeriod=qapPeriodText();
+  const details=qapDetailRows();
+  const totalBase=details.reduce((a,r)=>a+Number(r.base||0),0);
+  const totalEwt=details.reduce((a,r)=>a+Number(r.ewt||0),0);
+  const lines=[['HQAP','H1601EQ',companyTin,companyBranch,qapTextQuote(COMPANY_PROFILE.registeredName),qapPeriod,COMPANY_PROFILE.branchCode].join(',')];
+  details.forEach((r,idx)=>{
+    lines.push(['D1','1601EQ',idx+1,r.tin,r.branch,qapTextQuote(r.corp),qapTextQuote(r.last),qapTextQuote(r.first),qapTextQuote(r.middle),r.period,r.atc,r.rate.toFixed(2),slpDatNum(r.base),slpDatNum(r.ewt)].join(','));
+  });
+  lines.push(['C1','1601EQ',companyTin,companyBranch,qapPeriod,slpDatNum(totalBase),slpDatNum(totalEwt)].join(','));
+  return{lines,period,companyTin,companyBranch,count:details.length,totalBase,totalEwt,details};
+}
+function exportQAP1601EQExcel(){
+  if(!requireSingleMonthForBIR('QAP 1601EQ Schedule 1 Excel'))return;
+  const issues=birValidationIssuesForExport('qapExcel');
+  if(issues.length){showBIRValidationIssues('QAP 1601EQ Schedule 1 Excel',issues);return}
+  const details=qapDetailRows();
+  if(!details.length){showToast('No EWT rows to export for '+activeMonthLabel()+'.');return}
+  const rows=qapExcelRows();
+  const token=slpPeriodInfo().token;
+  downloadQAPExcelWorkbook(rows,`${slpTin9(COMPANY_PROFILE.tin)}${qapCompanyBranch()}${token}1601EQ_QAP_Schedule1.xlsx`);
+  showToast('QAP 1601EQ Schedule 1 Excel exported using the uploaded monthly template style.');
+}
+function exportQAP1601EQDAT(){
+  if(!requireSingleMonthForBIR('QAP 1601EQ Schedule 1 DAT'))return;
+  const issues=birValidationIssuesForExport('qapDat');
+  if(issues.length){showBIRValidationIssues('QAP 1601EQ Schedule 1 DAT',issues);return}
+  const dat=qapDatLines();
+  if(!dat.count){showToast('No EWT rows to export for '+activeMonthLabel()+'.');return}
+  const blob=new Blob([dat.lines.join('\r\n')+'\r\n'],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${dat.companyTin}${dat.companyBranch}${dat.period.token}1601EQ.DAT`;a.click();URL.revokeObjectURL(a.href);
+  showToast('QAP 1601EQ Schedule 1 DAT exported using the uploaded DAT reference format.');
+}
+
+function bookFullTin(value){
+  const digits=String(value||'').replace(/\D/g,'');
+  if(digits.length>=12)return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}-${digits.slice(9,12)}`;
+  if(digits.length===9)return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}`;
+  return String(value||'').trim();
+}
+function supplierBookAddress(t){return [t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' ')}
+function purchaseBookReference(t){return String(t.inv||t.invoiceNo||t.referenceNo||t.cv||'').trim()}
+function parseBookDate(value){
+  if(value instanceof Date&&!isNaN(value))return value;
+  const raw=String(value||'').trim();
+  if(!raw||raw==='--')return '';
+  const numeric=Number(raw);
+  if(Number.isFinite(numeric)&&numeric>20000&&numeric<70000){
+    const epoch=Date.UTC(1899,11,30);
+    return new Date(epoch+numeric*86400000);
+  }
+  const parsed=new Date(raw);
+  if(!isNaN(parsed))return parsed;
+  return raw;
+}
+function bookDateCell(value){
+  const d=parseBookDate(value);
+  if(d instanceof Date)return excelSerialFromDate(d);
+  return d;
+}
+function bookPeriodLabel(){return activeMonth==='all'?'Selected Period':activeMonthLabel()}
+function subsidiaryPurchaseBookDetailRow(t){
+  const amount=transactionAmount(t);
+  const vat=Number(t.vat||0);
+  const vatable=Number(t.vatable||0);
+  const nonVatable=Number(t.nonVatable||0);
+  const gross=Number(t.total||0) || amount+vat;
+  return [
+    bookDateCell(t.date),
+    bookFullTin(t.tin),
+    slpRegisteredName(t),
+    supplierBookAddress(t),
+    purchaseBookReference(t),
+    String(t.description||'').trim(),
+    vatable>0?vatable:'',
+    nonVatable>0?nonVatable:'',
+    vat>0?vat:'',
+    gross||'',
+    String(t.coaCode||t.accountingCode||t.account_code||'').trim(),
+    String(t.accountingTitle||'').trim(),
+    '',
+    ''
+  ];
+}
+function subsidiaryPurchaseBookRows(){
+  const rows=[
+    ['','','','','','','','','','','','','',''],
+    ['NAME:',`: ${COMPANY_PROFILE.bookName||'LOC&STOR 24/7, INC.'}`,'','','','','','','','','',''],
+    ["OWNER'S ADDRESS",`: ${COMPANY_PROFILE.bookAddress||[COMPANY_PROFILE.address,COMPANY_PROFILE.cityZip].filter(Boolean).join(' ')}`,'','','','','','','','','',''],
+    ['VAT Reg. TIN',`: ${formatTIN(COMPANY_PROFILE.bookTin||COMPANY_PROFILE.tin+'000')}`,'','SUBSIDIARY PURCHASE JOURNAL','','','','','','','',''],
+    ['PERIOD',`: ${bookPeriodLabel()}`,'','','','','','','','','',''],
+    ['PERMIT TO USE NO.',`: ${COMPANY_PROFILE.permitToUseNo||'XXXXXXXXXXXX'}`,'','','','','','','','','',''],
+    ['','','','','0','','','','','','',''],
+    ['DATE','TIN','VENDOR NAME','VENDOR ADDRESS','Reference No. *','DESCRIPTION','VATABLE AMOUNT','NON VATABLE AMOUNT','TAX AMOUNT','GROSS AMOUNT','COA CODE','COA TITLE','','']
+  ];
+  birSourceRows().forEach(t=>rows.push(subsidiaryPurchaseBookDetailRow(t)));
+  return rows;
+}
+function downloadSubsidiaryPurchaseBookWorkbook(rows,name){
+  if(!ensureXLSX())return;
+  const cleanRows=rows.map(r=>r.map(v=>v==null?'':v));
+  const ws=XLSX.utils.aoa_to_sheet(cleanRows);
+  ws['!cols']=[{wch:13},{wch:18},{wch:34},{wch:48},{wch:24},{wch:55},{wch:16},{wch:18},{wch:16},{wch:16},{wch:14},{wch:34},{wch:10},{wch:10}];
+  ws['!merges']=[{s:{r:3,c:3},e:{r:3,c:8}}];
+  const range=XLSX.utils.decode_range(ws['!ref']||'A1:N1');
+  for(let r=8;r<=range.e.r+1;r++){
+    const dateCell=ws['A'+r];
+    if(dateCell&&typeof dateCell.v==='number')dateCell.z='mm/dd/yyyy';
+    ['G','H','I','J'].forEach(col=>{const cell=ws[col+r];if(cell&&cell.v!==''&&cell.v!=null)cell.z='#,##0.00';});
+  }
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Purchase Journal');
+  XLSX.writeFile(wb,name);
+}
+function cashBookReference(t){return String(t.cv||t.cvNo||t.cv_number||'').trim()}
+function cashDisbursementBookDetailRow(t){
+  const gross=Number(t.total||0) || transactionAmount(t)+Number(t.vat||0);
+  const ewt=Number(t.ewtAmount||0);
+  const withheld=ewt ? -Math.abs(ewt) : 0;
+  const cashAmount=gross + withheld;
+  return [
+    bookDateCell(t.date),
+    bookFullTin(t.tin)||'0',
+    slpRegisteredName(t)||'',
+    cashBookReference(t),
+    String(t.description||'').trim(),
+    cashAmount||'',
+    withheld||0,
+    gross||'',
+    String(t.bankAccount||'').trim()
+  ];
+}
+function cashDisbursementBookRows(){
+  const details=birCashSourceRows().map(cashDisbursementBookDetailRow);
+  const totals=details.reduce((a,r)=>{a.cash+=Number(r[5]||0);a.withheld+=Number(r[6]||0);a.gross+=Number(r[7]||0);return a},{cash:0,withheld:0,gross:0});
+  const rows=[
+    ['','','','','','','','',''],
+    ['NAME:',`: ${COMPANY_PROFILE.bookName||'LOC&STOR 24/7, INC.'}`,'','','','','','',''],
+    ["OWNER'S ADDRESS",`: ${COMPANY_PROFILE.bookAddress||[COMPANY_PROFILE.address,COMPANY_PROFILE.cityZip].filter(Boolean).join(' ')}`,'','','','','','',''],
+    ['VAT Reg. TIN',`: ${formatTIN(COMPANY_PROFILE.bookTin||COMPANY_PROFILE.tin+'000')}`,'','CASH DISBURSEMENT JOURNAL','','','','',''],
+    ['PERIOD',`: ${bookPeriodLabel()}`,'','','','','','',''],
+    ['PERMIT TO USE NO.',`: ${COMPANY_PROFILE.permitToUseNo||'XXXXXXXXXXXX'}`,'','','','','','',''],
+    ['','','','0','',totals.cash,totals.withheld,totals.gross,''],
+    ['DATE','TIN','VENDOR NAME','CDJ (CV number)','DESCRIPTION','CASH ACCOUNT','WITHHELD TAX','GROSS AMOUNT','Cash Account']
+  ];
+  details.forEach(r=>rows.push(r));
+  return rows;
+}
+function downloadCashDisbursementBookWorkbook(rows,name){
+  if(!ensureXLSX())return;
+  const cleanRows=rows.map(r=>r.map(v=>v==null?'':v));
+  const ws=XLSX.utils.aoa_to_sheet(cleanRows);
+  ws['!cols']=[{wch:13},{wch:18},{wch:34},{wch:24},{wch:60},{wch:16},{wch:16},{wch:16},{wch:42}];
+  ws['!merges']=[{s:{r:3,c:3},e:{r:3,c:7}}];
+  const range=XLSX.utils.decode_range(ws['!ref']||'A1:I1');
+  for(let r=9;r<=range.e.r+1;r++){
+    const dateCell=ws['A'+r];
+    if(dateCell&&typeof dateCell.v==='number')dateCell.z='mm/dd/yyyy';
+    ['F','G','H'].forEach(col=>{const cell=ws[col+r];if(cell&&cell.v!==''&&cell.v!=null)cell.z='#,##0.00';});
+  }
+  ['F7','G7','H7'].forEach(addr=>{if(ws[addr])ws[addr].z='#,##0.00';});
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Disbursement Journal');
+  XLSX.writeFile(wb,name);
+}
+function exportSubsidiaryPurchaseBookExcel(){
+  if(!requireSingleMonthForBIR('Subsidiary Purchase Book'))return;
+  const issues=birValidationIssuesForExport('purchaseBook');
+  if(issues.length){showBIRValidationIssues('Subsidiary Purchase Book',issues);return}
+  const rows=subsidiaryPurchaseBookRows();
+  if(rows.length<=8){showToast('No purchase rows to export for '+activeMonthLabel()+'.');return}
+  downloadSubsidiaryPurchaseBookWorkbook(rows,`${slpTin9(COMPANY_PROFILE.tin)}_Subsidiary_Purchase_Book_${slpPeriodInfo().token}.xlsx`);
+  showToast('Subsidiary Purchase Book exported using the uploaded template layout.');
+}
+function exportCashDisbursementBookExcel(){
+  if(!requireSingleMonthForBIR('Cash Disbursement Book'))return;
+  const issues=birValidationIssuesForExport('cashBook');
+  if(issues.length){showBIRValidationIssues('Cash Disbursement Book',issues);return}
+  const rows=cashDisbursementBookRows();
+  if(rows.length<=8){showToast('No cash disbursement rows to export for '+activeMonthLabel()+'.');return}
+  downloadCashDisbursementBookWorkbook(rows,`${slpTin9(COMPANY_PROFILE.tin)}_Cash_Disbursement_Book_${slpPeriodInfo().token}.xlsx`);
+  showToast('Cash Disbursement Book exported using the uploaded template layout.');
+}
+
+
+function exportBIRComplianceIndexXLSX(){
+  const rows=[['Export','Source','Month Requirement','Status / Notes'],['SLP Excel','Purchase Transactions + Supplier Master','Specific month only','Excludes rows missing both VAT Category and ATC Code; template-aligned monthly SLP workbook'],['SLP DAT','Purchase Transactions + Supplier Master','Specific month only','Excludes rows missing both VAT Category and ATC Code; DAT follows uploaded sample and validates supplier details'],['QAP 1601EQ Schedule 1 Excel','EWT rows from Purchase Transactions + ATC Master','Specific month only','Excludes rows missing both VAT Category and ATC Code; template-aligned monthly QAP Excel export'],['QAP 1601EQ Schedule 1 DAT','EWT rows from Purchase Transactions + ATC Master','Specific month only','Excludes rows missing both VAT Category and ATC Code; DAT follows uploaded HQAP/D1/C1 sample format'],['Subsidiary Purchase Book','Purchase Transactions','Specific month only','Excludes rows missing both VAT Category and ATC Code; template-aligned purchase journal layout'],['Cash Disbursement Book','Purchase Transactions','Specific month only','Lenient exception: includes rows even if both VAT Category and ATC Code are blank']];
+  downloadXLSX(rows,'bir_compliance_export_index.xlsx','BIR Compliance');
+  showToast('BIR Compliance export index downloaded.');
+}
+function selectBirReport(report){
+  activeBirReport=report||'slpExcel';
+  renderBirCompliance();
+}
+function birReportLabel(report){
+  return ({slpExcel:'Summary List of Purchases — Excel',slpDat:'Summary List of Purchases — DAT',qapExcel:'QAP 1601EQ Schedule 1 — Excel',qapDat:'QAP 1601EQ Schedule 1 — DAT',purchaseBook:'Subsidiary Purchase Book',cashBook:'Cash Disbursement Book'})[report]||'Summary List of Purchases — Excel';
+}
+function birReportExportFn(report){
+  return ({slpExcel:'exportSLPExcel',slpDat:'exportSLPDAT',qapExcel:'exportQAP1601EQExcel',qapDat:'exportQAP1601EQDAT',purchaseBook:'exportSubsidiaryPurchaseBookExcel',cashBook:'exportCashDisbursementBookExcel'})[report]||'exportSLPExcel';
+}
+function birIssue(cv,voucher,invoice,message){return{cv:String(cv||'(No CV)'),voucher:String(voucher||'(No voucher)'),invoice:String(invoice||'(No invoice)'),message}}
+function validateQAPSourceRows(rows){
+  const issues=[];
+  rows.forEach(t=>{
+    const missing=[];
+    if(slpTin9(t.tin).length!==9)missing.push('9-digit supplier TIN');
+    if(!slpRegisteredName(t))missing.push('supplier registered name');
+    if(!atcText(t.atcCode)||atcText(t.atcCode)==='--')missing.push('ATC Code');
+    const rate=atcRateForCode(t.atcCode);
+    if(rate===null)missing.push('ATC Master rate');
+    if(!(transactionAmount(t)>0))missing.push('amount');
+    if(missing.length)issues.push(birIssue(t.cv,t.voucherName,t.inv,'missing '+missing.join(', ')));
+  });
+  return issues;
+}
+
+
+function makeBirAttentionRows(issues,headerCount){
+  const count=Math.max(Number(headerCount||0),5);
+  return (issues||[]).map(i=>{
+    const row=['Attention Needed',`CV: ${i.cv||''}`,`Voucher: ${i.voucher||''}`,`Invoice: ${i.invoice||''}`,i.message||'Issue found'];
+    while(row.length<count)row.push('');
+    return row.slice(0,count);
+  });
+}
+function validateBookSourceRows(rows,kind){
+  const issues=[];
+  rows.forEach(t=>{
+    const missing=[];
+    if(!String(t.date||'').trim()||String(t.date||'').trim()==='--')missing.push('date');
+    if(!String(t.cv||'').trim())missing.push('CV No.');
+    if(!String(t.voucherName||'').trim())missing.push('voucher name');
+    if(kind==='purchase'){
+      if(bookFullTin(t.tin).replace(/\D/g,'').length<9)missing.push('supplier TIN');
+      if(!slpRegisteredName(t))missing.push('vendor name');
+      if(!supplierBookAddress(t))missing.push('vendor address');
+      if(!String(t.accountingTitle||'').trim())missing.push('COA title / accounting title');
+      if(!String(t.description||'').trim())missing.push('description');
+    }
+    if(kind==='cash'){
+      if(!String(t.accountingTitle||'').trim())missing.push('accounting title');
+      if(!String(t.bankAccount||'').trim())missing.push('bank account');
+      if(!String(t.description||'').trim())missing.push('description');
+      if(!(Number(t.total||0)>0))missing.push('total amount');
+    }
+    if(!(transactionAmount(t)>0))missing.push('amount');
+    if(missing.length)issues.push(birIssue(t.cv,t.voucherName,t.inv,'missing '+missing.join(', ')));
+  });
+  return issues;
+}
+function birPreviewPayload(report){
+  let headers=[],rows=[],issues=[],note='',sourceCount=0;
+  const monthWarn=activeMonth==='all'?'Select one month before exporting this report. Preview may still show current filtered data.':'';
+  if(report==='slpExcel'){
+    const source=slpExcelSourceRows();sourceCount=source.length;issues=validateSLPDatSourceRows(source).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')));
+    headers=['Taxable Month','Supplier TIN','Registered Name','Name of Supplier','Supplier Address','Gross Purchase','Exempt Purchase','Taxable Purchase','Services','Capital Goods','Other Goods','Input Tax','Gross Taxable'];
+    const monthSerial=excelSerialFromDate(slpExcelPeriodEndDate());
+    rows=source.slice(0,25).map(t=>{const r=slpExcelBucketRow(t,monthSerial);return [activeMonthLabel(),r[1],r[2],r[3],r[4],peso(r[5]),peso(r[6]),peso(r[8]),peso(r[9]),peso(r[10]),peso(r[11]),peso(r[12]),peso(r[13])];});
+    note='Preview excludes rows missing both VAT Category and ATC Code, then validates exported SLP lines so reports cannot download partially.';
+  }else if(report==='slpDat'){
+    const dat=slpDatRows();sourceCount=(dat.details||[]).length;issues=(dat.validationIssues||[]).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')));
+    headers=['Record','Filing','Supplier TIN','Registered Name','Address','City','Exempt','Services','Capital Goods','Other Goods','Input VAT'];
+    rows=(dat.details||[]).slice(0,25).map(r=>['D',COMPANY_PROFILE.filingType,r.tin,r.corp||[r.last,r.first,r.middle].filter(Boolean).join(', '),r.address,r.city,peso(r.exempt),peso(r.services),peso(r.capital),peso(r.goods),peso(r.inputVat)]);
+    note='Preview excludes rows missing both VAT Category and ATC Code, then validates exported SLP DAT lines so reports cannot download partially.';
+  }else if(report==='qapExcel'){
+    const source=ewtSourceRows();sourceCount=source.length;issues=validateQAPSourceRows(source);
+    const details=qapDetailRows();
+    headers=['Seq','Taxpayer Identification Number','Corporation / Individual','ATC Code','Nature of Payment','Income Payment','Tax Rate','Tax Withheld','Total Income Payment','Total Tax Withheld'];
+    rows=details.slice(0,25).map((r,idx)=>[idx+1,qapFullTin(r.tin,r.branch),r.corp||[r.last,r.first,r.middle].filter(Boolean).join(', '),r.atc,qapNatureForCode(r.atc),peso(r.base),r.rate.toFixed(2)+'%',peso(r.ewt),peso(r.base),peso(r.ewt)]);
+    note='Preview follows the uploaded QAP Excel template, but exports the selected month only. Export is blocked if ATC code/rate, supplier details, or amount is incomplete.';
+  }else if(report==='qapDat'){
+    const source=ewtSourceRows();sourceCount=source.length;issues=validateQAPSourceRows(source);
+    const details=qapDetailRows();
+    headers=['Record','Seq','Supplier TIN','Branch','Corporation / Individual Name','Period','ATC Code','Rate','Tax Base Amount','Computed EWT','Source Lines'];
+    rows=details.slice(0,25).map((r,idx)=>['D1',idx+1,formatTin9Hyphen(r.tin),r.branch,r.corp||[r.last,r.first,r.middle].filter(Boolean).join(', '),r.period,r.atc,r.rate.toFixed(2)+'%',peso(r.base),peso(r.ewt),r.count]);
+    note='Preview follows the uploaded QAP DAT structure: HQAP header, D1 detail rows, and C1 control totals. Export is blocked if ATC code/rate, supplier details, or amount is incomplete.';
+  }else if(report==='purchaseBook'){
+    const source=birSourceRows();sourceCount=source.length;issues=validateBookSourceRows(source,'purchase');
+    headers=['Date','TIN','Vendor Name','Vendor Address','Reference No.','Description','Vatable Amount','Non-Vatable Amount','Tax Amount','Gross Amount','COA Code','COA Title'];
+    rows=source.slice(0,25).map(t=>{
+      const r=subsidiaryPurchaseBookDetailRow(t);
+      return [t.date, r[1], r[2], r[3], r[4], r[5], peso(r[6]||0), peso(r[7]||0), peso(r[8]||0), peso(r[9]||0), r[10], r[11]];
+    });
+    note='Preview excludes rows missing both VAT Category and ATC Code and follows the uploaded Subsidiary Purchase Book template. Export is blocked only if a required book/export field is missing.';
+  }else{
+    const source=birCashSourceRows();sourceCount=source.length;issues=validateBookSourceRows(source,'cash');
+    headers=['Date','TIN','Vendor Name','CDJ (CV number)','Description','Cash Account','Withheld Tax','Gross Amount','Cash Account'];
+    rows=source.slice(0,25).map(t=>{
+      const r=cashDisbursementBookDetailRow(t);
+      return [t.date,r[1],r[2],r[3],r[4],peso(r[5]||0),peso(r[6]||0),peso(r[7]||0),r[8]];
+    });
+    note='Preview includes all cash disbursement lines, including rows with no VAT Category and no ATC Code, and follows the uploaded Cash Disbursement Book template. CDJ (CV number) keeps the stored CV reference exactly as encoded, including suffixes used to split one voucher into multiple accounting-title lines.';
+  }
+  const finalIssues=birValidationIssuesForExport(report);
+  issues=finalIssues.length?finalIssues:issues;
+  const attentionRows=makeBirAttentionRows(issues,headers.length);
+  return{headers,rows,issues,note,sourceCount,attentionRows};
+}
+function birValidationIssuesForExport(report){
+  const blockers=birMonthWideBlockerIssues(report);
+  if(blockers.length)return dedupeBirIssues(blockers);
+  let reportIssues=[];
+  if(report==='slpExcel'){reportIssues=validateSLPDatSourceRows(slpExcelSourceRows()).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')))}
+  else if(report==='slpDat'){reportIssues=(slpDatRows().validationIssues||[]).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')))}
+  else if(report==='qapExcel'||report==='qapDat')reportIssues=validateQAPSourceRows(ewtSourceRows());
+  else if(report==='purchaseBook')reportIssues=validateBookSourceRows(birSourceRows(),'purchase');
+  else if(report==='cashBook')reportIssues=validateBookSourceRows(birCashSourceRows(),'cash');
+  return dedupeBirIssues(reportIssues);
+}
+
+function showBIRValidationIssues(label,issues){
+  const preview=issues.slice(0,12).map(i=>`• ${i.cv} / ${i.voucher}${i.invoice?` / ${i.invoice}`:''}: ${i.message}`).join('\n');
+  const more=issues.length>12?`\n...and ${issues.length-12} more issue(s).`:'';
+  alert(`Cannot export ${label} yet. Please resolve the preview issues first.\n\n${preview}${more}`);
+}
+
+function exportSelectedBirReport(){
+  const select=document.getElementById('birReportSelect');
+  const report=(select&&select.value)||activeBirReport||'slpExcel';
+  activeBirReport=report;
+  const label=birReportLabel(report);
+  const issues=birValidationIssuesForExport(report);
+  if(issues.length){showBIRValidationIssues(label,issues);renderBirCompliance();return;}
+  const fnMap={
+    slpExcel:exportSLPExcel,
+    slpDat:exportSLPDAT,
+    qapExcel:exportQAP1601EQExcel,
+    qapDat:exportQAP1601EQDAT,
+    purchaseBook:exportSubsidiaryPurchaseBookExcel,
+    cashBook:exportCashDisbursementBookExcel
+  };
+  const fn=fnMap[report];
+  if(typeof fn!=='function'){alert('Export function is not available for '+label+'.');return;}
+  fn();
+}
+function renderBirFallback(err){
+  const status=document.getElementById('birPreviewStatus');
+  const actions=document.getElementById('birReportActions');
+  const title=document.getElementById('birPreviewTitle');
+  const note=document.getElementById('birPreviewNote');
+  const thead=document.getElementById('birThead'),tbody=document.getElementById('birTbody'),tfoot=document.getElementById('birTfoot');
+  if(actions)actions.innerHTML=`<button class="btn btn-primary" id="birExportSelectedBtn" onclick="exportSelectedBirReport()">Export Selected Report</button><button class="btn" onclick="renderBirCompliance()">Refresh Preview</button>`;
+  if(title)title.textContent=birReportLabel(activeBirReport)+' Preview';
+  if(status){status.className='bir-preview-status err';status.innerHTML='<strong>Preview error:</strong> The preview panel could not render. The export button remains available and will still run validation before downloading.<div class="bir-issue-list"><div>'+esc(err&&err.message?err.message:String(err||'Unknown error'))+'</div></div>';}
+  if(note)note.textContent='Use Refresh Preview after correcting data. Export still blocks if validation fails.';
+  if(thead)thead.innerHTML='<tr><th>Status</th></tr>';
+  if(tbody)tbody.innerHTML='<tr><td>Preview unavailable because of a rendering error.</td></tr>';
+  if(tfoot)tfoot.innerHTML='<tr><td>Export validation is still active.</td></tr>';
+}
+function normalizeBirPreviewRow(row, headerCount){
+  let cells=[];
+  if(Array.isArray(row))cells=row;
+  else if(row && typeof row==='object')cells=Object.values(row);
+  else cells=[row??''];
+  const count=Math.max(headerCount||0,cells.length||0,1);
+  while(cells.length<count)cells.push('');
+  return cells.slice(0,count);
+}
+function renderBirPreviewTable(payload){
+  const title=document.getElementById('birPreviewTitle');
+  const status=document.getElementById('birPreviewStatus');
+  const note=document.getElementById('birPreviewNote');
+  const thead=document.getElementById('birThead'),tbody=document.getElementById('birTbody'),tfoot=document.getElementById('birTfoot');
+  const safePayload=payload&&typeof payload==='object'?payload:{headers:['Preview'],rows:[],issues:[birIssue('Preview','','','Preview payload was not generated.')],note:'Preview unavailable.',sourceCount:0};
+  const headers=Array.isArray(safePayload.headers)&&safePayload.headers.length?safePayload.headers:['Preview'];
+  const rows=Array.isArray(safePayload.rows)?safePayload.rows:[];
+  const issues=Array.isArray(safePayload.issues)?safePayload.issues:[];
+  const attentionRows=Array.isArray(safePayload.attentionRows)?safePayload.attentionRows:[];
+  const sourceCount=Number(safePayload.sourceCount||0);
+  if(title)title.textContent=birReportLabel(activeBirReport)+' Preview';
+  if(status){
+    const hasRows=sourceCount>0||rows.length>0;
+    const hardIssues=issues.length;
+    status.className='bir-preview-status '+(hardIssues?'err':hasRows?'ok':'warn');
+    const issueLines=issues.slice(0,5).map(i=>`<div>• ${esc(i.cv||'')} / ${esc(i.voucher||'')}${i.invoice?` / ${esc(i.invoice)}`:''}: ${esc(i.message||'Issue found')}</div>`).join('');
+    const more=issues.length>5?`<div>...and ${issues.length-5} more issue(s).</div>`:'';
+    status.innerHTML=hardIssues?`<strong>Export blocked:</strong> ${hardIssues} issue(s) found. Preview remains available below.<div class="bir-issue-list">${issueLines}${more}</div>`:hasRows?`<strong>Preview ready:</strong> ${sourceCount||rows.length} row(s) available. Export will still run final validation before downloading.`:`<strong>No rows:</strong> No source rows are available for this report and period.`;
+  }
+  if(note)note.textContent=(safePayload.note||'Preview shown for review.')+(rows.length<sourceCount?` Showing first ${rows.length} of ${sourceCount} row(s).`:'' );
+  if(!thead||!tbody||!tfoot)return;
+  thead.innerHTML='<tr>'+headers.map(h=>`<th>${esc(h)}</th>`).join('')+'</tr>';
+  const attentionHtml=attentionRows.length?`<tr class="bir-attention-header-row"><td colspan="${headers.length}"><span class="bir-attention-note">Review Queue</span> Attention Needed transactions are pinned here until fixed.</td></tr>`+attentionRows.map(row=>{
+    const cells=normalizeBirPreviewRow(row,headers.length);
+    return '<tr class="bir-attention-row">'+cells.map(v=>`<td>${v&&String(v).startsWith('<span class="peso"')?v:esc(v)}</td>`).join('')+'</tr>';
+  }).join(''):'';
+  const previewHtml=rows.length?rows.map(row=>{
+      const cells=normalizeBirPreviewRow(row,headers.length);
+      return '<tr>'+cells.map(v=>`<td>${v&&String(v).startsWith('<span class="peso"')?v:esc(v)}</td>`).join('')+'</tr>';
+    }).join(''):'';
+  if(attentionHtml||previewHtml){
+    tbody.innerHTML=attentionHtml+previewHtml;
+  }else{
+    tbody.innerHTML=`<tr><td colspan="${headers.length}"><div class="empty-state"><p>No preview rows for this report.</p></div></td></tr>`;
+  }
+  tfoot.innerHTML=`<tr><td colspan="${headers.length}">${issues.length?'Resolve issues above before exporting.':'Preview shown for review. Export will re-check data before download.'}</td></tr>`;
+}
+function renderBirCompliance(){
+  try{
+    // BIR Compliance summary cards were intentionally removed from the UI.
+    // Keep the preview/export logic independent from any summary metric element.
+    const select=document.getElementById('birReportSelect');
+    if(select){
+      if(!select.value)select.value=activeBirReport||'slpExcel';
+      activeBirReport=select.value||activeBirReport||'slpExcel';
+    }
+    const actions=document.getElementById('birReportActions');
+    if(actions)actions.innerHTML=`<button class="btn btn-primary" id="birExportSelectedBtn" onclick="exportSelectedBirReport()">Export Selected Report</button><button class="btn" onclick="renderBirCompliance()">Refresh Preview</button>`;
+    const payload=birPreviewPayload(activeBirReport||'slpExcel');
+    renderBirPreviewTable(payload);
+  }catch(err){
+    console.error('BIR preview render failed:',err);
+    renderBirFallback(err);
+  }
+}
+function exportXLSX(){if(activeTab==='working')exportWorkingXLSX();else if(activeTab==='vat')exportLedgerXLSX('vat');else if(activeTab==='ewt')exportLedgerXLSX('ewt');else if(activeTab==='bir')exportBIRComplianceIndexXLSX();else if(activeTab==='masters'){if(activeMasterSub==='vatCategories')exportVatCategoriesXLSX();else if(activeMasterSub==='atcRates')exportAtcMasterXLSX();else exportSupplierXLSX()}else exportSummaryXLSX()}
+function exportSummaryXLSX(){const rows=[['Voucher Name','Accounting Title','Bank Account','Registered Supplier','TIN','Registered Address','City','ZIP Code','CV No.','Invoice/OR No.','Date','Description','Amount','Computed VAT Amount','Total Amount','VAT Type','Computed EWT Amount','ATC Code','ATC Rate','Compliance','Review Note','Last Reviewed']];filteredTransactions('summary').forEach(t=>rows.push([t.voucherName,t.accountingTitle,t.bankAccount,t.supplier,t.tin,t.address,t.city,t.zip,t.cv,t.inv,t.date,t.description,transactionAmount(t),t.vat,t.total,vatTypeText(t.vatReg),t.ewtAmount,atcText(t.atcCode),atcRateText(t.atcCode),verificationText(t.manualStatus),t.reviewNote,t.lastReviewed]));downloadXLSX(rows,'vat_compliance_summary_export.xlsx','Compliance Summary');showToast('Summary export downloaded.')}
+function exportWorkingXLSX(){const groups=filteredCVGroups();const groupMap=new Map(groups.map(g=>[g.cv,g]));const rows=[['Voucher Name','CV No.','Accounting Title','Bank Account','Registered Supplier','TIN','Registered Address','City','ZIP Code','Invoice/OR No.','Date','Description','Amount','VAT Category','Computed VAT Amount','Total Amount','Computed EWT Amount','ATC Code','ATC Rate','VAT Balance Status by CV','EWT Balance Status by CV','Verification','Review Note','Last Reviewed']];groups.forEach(g=>g.txns.forEach(t=>{const cvGroup=groupMap.get(t.cv||'(No CV Number)')||{};rows.push([t.voucherName,t.cv,t.accountingTitle,t.bankAccount,t.supplier,t.tin,t.address,t.city,t.zip,t.inv,t.date,t.description,transactionAmount(t),vatCategoryText(t.vatCategory),t.vat,t.total,t.ewtAmount,atcText(t.atcCode),atcRateText(t.atcCode),isBalanced(cvGroup.vatDiff||0)?'Balanced':'Not Balanced',isBalanced(cvGroup.ewtDiff||0)?'Balanced':'Not Balanced',verificationText(t.manualStatus),t.reviewNote,t.lastReviewed])}));downloadXLSX(rows,'purchase_transactions_export.xlsx','Purchase Transactions');showToast('Purchase Transactions export downloaded.')}
+
+function exportLedgerXLSX(type){const rows=[['CV No.','Supplier / Voucher','Uploaded Balance','Purchase Amount by CV','Difference','Status']];ledgerRowsByCV(type).forEach(item=>rows.push([item.cv,item.suppliers,item.ledgerAmount,item.purchaseAmount,item.diff,item.status==='balanced'?'Balanced':'Not Balanced']));downloadXLSX(rows,type==='vat'?'vat_balances_export.xlsx':'ewt_balances_export.xlsx',type==='vat'?'VAT Balances':'EWT Balances');showToast((type==='vat'?'VAT':'EWT')+' Balances export downloaded.')}
+function downloadCSV(rows,name){downloadXLSX(rows,String(name||'export.csv').replace(/\.csv$/i,'.xlsx'),'Export')}
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
+function handleVerificationClick(e){
+  const close=e.target.closest('[data-close-cv-review]');
+  if(close){e.stopPropagation();closeCVReviewModal();return}
+  const remove=e.target.closest('.wp-remove');
+  if(remove){e.stopPropagation();removeTransaction(remove.dataset.id);renderCVReviewModal();return}
+  if(e.target.closest('input')||e.target.closest('select')||e.target.closest('button'))e.stopPropagation();
+}
+function handleVerificationInput(e){const tin=e.target.closest('.tin-auto');if(tin&&tin.dataset.id)queueSupplierLookupForRow(tin.dataset.id)}
+function handleVerificationChange(e){const field=e.target.closest('.wp-autosave');if(!field||!field.dataset.id)return;const id=field.dataset.id;if(field.classList.contains('wp-status'))applyVerificationStatusClass(field);if(field.classList.contains('tin-auto'))autoLookupSupplierForRow(id,false);if(field.id&&(/wp_amount_|wp_vatcat_|wp_atc_|wp_total_/.test(field.id)))updateWorkingTaxPreview(id);queueAutoSaveWorkingRow(id,80)}
+function handleVerificationFocusOut(e){const field=e.target.closest('.wp-autosave');if(!field||!field.dataset.id)return;const id=field.dataset.id;if(field.classList.contains('tin-auto'))autoLookupSupplierForRow(id,true);if(field.id&&(/wp_amount_|wp_vatcat_|wp_atc_|wp_total_/.test(field.id)))updateWorkingTaxPreview(id);queueAutoSaveWorkingRow(id,80)}
+document.getElementById('workTbody').addEventListener('click',handleVerificationClick);
+document.getElementById('workTbody').addEventListener('input',handleVerificationInput);
+document.getElementById('workTbody').addEventListener('change',handleVerificationChange);
+document.getElementById('workTbody').addEventListener('focusout',handleVerificationFocusOut);
+document.getElementById('summaryReviewModal').addEventListener('click',e=>{if(e.target.id==='summaryReviewModal'||e.target.closest('[data-close-summary-review]')){closeSummaryReviewModal();return}});
+document.getElementById('cvReviewModal').addEventListener('click',e=>{if(e.target.id==='cvReviewModal'){closeCVReviewModal();return}handleVerificationClick(e)});
+document.getElementById('cvReviewModal').addEventListener('input',handleVerificationInput);
+document.getElementById('cvReviewModal').addEventListener('change',handleVerificationChange);
+document.getElementById('cvReviewModal').addEventListener('focusout',handleVerificationFocusOut);
+const dz=document.getElementById('dropZone');dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');const f=e.dataTransfer.files[0];if(f){const inp=document.getElementById('xlsxInput');const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;handleXLSX({target:inp})}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(activeSummaryReview){closeSummaryReviewModal();return}if(focusedCV){closeCVReviewModal();}}});
+updateImportHelp();updateTaxPreview('f');renderAll();
