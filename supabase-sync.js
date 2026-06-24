@@ -677,6 +677,66 @@
     catch(err){ console.error(err); setCloudStatus('Cloud load failed: '+err.message,'warn','Click Cloud for details'); if(manual) showErrorBox('Cloud load failed: '+err.message); }
   }
 
+  // One-time recovery: pull any prior work from the legacy per-user storage
+  // (the old blob table named in supabase-config.js, plus whatever this
+  // browser still holds) and merge it into the shared central tables.
+  // Safe to run more than once: records dedupe by their stable _id.
+  async function recoverPreviousData(){
+    if(!supabaseClient||!cloudUser){ showErrorBox('Please log in first.'); return; }
+    const legacyTable = CFG.table || '';
+    setCloudStatus('Recovering previous data...','busy','Reading earlier storage');
+    try{
+      const merged={}; ENTITIES.forEach(e=>merged[e.key]=new Map());
+
+      // 1) Legacy blob table (old decentralized cloud copy). RLS may limit
+      //    this to the rows you are allowed to read (usually your own).
+      if(legacyTable){
+        const { data, error } = await supabaseClient.from(legacyTable).select('*');
+        if(error){ console.warn('Legacy table read skipped:', error.message); }
+        else if(Array.isArray(data)){
+          data.sort((a,b)=> new Date(a.updated_at||a.created_at||0) - new Date(b.updated_at||b.created_at||0)); // newest overwrites
+          data.forEach(row=>{
+            const app = row.app_data || row.data || row.payload || null;
+            if(!app||typeof app!=='object') return;
+            ENTITIES.forEach(e=>{
+              const arr = Array.isArray(app[e.key]) ? app[e.key] : [];
+              arr.forEach(r=>{ const rec=e.norm(r); if(!rec._id) rec._id=makeId(e.key); merged[e.key].set(rec._id,rec); });
+            });
+          });
+        }
+      }
+
+      // 2) Whatever this browser currently holds in memory / local storage.
+      ENTITIES.forEach(e=>{ (e.get()||[]).forEach(r=>{ const rec=e.norm(r); if(rec._id && !merged[e.key].has(rec._id)) merged[e.key].set(rec._id,rec); }); });
+
+      const total = ENTITIES.reduce((n,e)=>n+merged[e.key].size,0);
+      if(!total){ setCloudStatus('No previous data found to recover.','warn','Nothing to import'); showErrorBox('No previous data was found in the legacy table or this browser. If the work was done on another computer or account, run Recover there, or check that the table name in supabase-config.js is correct.'); return; }
+
+      const now=new Date().toISOString(); const name=currentUserName();
+      let imported=0, newlyAudited=0;
+      for(const e of ENTITIES){
+        const rows=[...merged[e.key].values()];
+        if(!rows.length) continue;
+        const up=rows.map(r=>({ record_id:r._id, data:r, last_modified_by:cloudUser.id, last_modified_by_name:name, last_modified_at:now }));
+        const res=await supabaseClient.from(e.table).upsert(up,{ onConflict:'record_id' });
+        if(res.error) throw res.error;
+        imported+=rows.length;
+        // Audit only records that were not already in the shared tables.
+        const fresh=rows.filter(r=>!(snapshots[e.key] && snapshots[e.key].has(r._id)));
+        const audits=fresh.map(r=>({ user_id:cloudUser.id, user_name:name, action_type:'Sync', module:e.module, record_id:r._id, old_value:null, new_value:r, ip_address:clientIp }));
+        for(let i=0;i<audits.length;i+=500){ const ar=await supabaseClient.from('audit_log').insert(audits.slice(i,i+500)); if(ar.error) console.warn('Audit insert warn:',ar.error.message); }
+        newlyAudited+=audits.length;
+      }
+      await loadAllCentral();
+      setCloudStatus('Previous data recovered into the shared cloud.','ok', imported+' record(s) now shared');
+      showToastSafe('Recovered '+imported+' record(s) ('+newlyAudited+' new) into the shared workspace.');
+    }catch(err){
+      console.error('Recovery failed:',err);
+      setCloudStatus('Recovery failed: '+err.message,'warn','Click Cloud for details');
+      showErrorBox('Recovery failed: '+err.message);
+    }
+  }
+
   /* ---------- cloud popover plumbing (unchanged UX) ---------- */
   function toggleCloudPopover(event){ if(event) event.stopPropagation(); const w=byId('cloudWidget'); if(!w) return; w.classList.toggle('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded',w.classList.contains('open')?'true':'false'); }
   function closeCloudPopover(){ const w=byId('cloudWidget'); if(w) w.classList.remove('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded','false'); }
@@ -685,7 +745,7 @@
 
   /* ---------- exports ---------- */
   window.signUp=signUp; window.logIn=logIn; window.logOut=logOut;
-  window.saveCloudData=saveCloudData; window.loadCloudData=loadCloudData;
+  window.saveCloudData=saveCloudData; window.loadCloudData=loadCloudData; window.recoverPreviousData=recoverPreviousData;
   window.toggleCloudPopover=toggleCloudPopover; window.closeCloudPopover=closeCloudPopover; window.handleLoginKey=handleLoginKey;
   window.openAuditTrail=openAuditTrail; window.refreshAuditTrail=refreshAuditTrail; window.exportAuditTrail=exportAuditTrail; window.auditApplyFilters=renderAuditTable;
 

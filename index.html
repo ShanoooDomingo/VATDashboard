@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>VAT Compliance Purchase Dashboard</title>
 <script type="text/javascript" src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body class="auth-locked">
 
@@ -37,7 +38,7 @@
         <div class="cloud-popover-head"><div><div class="cloud-title">Cloud Database</div><div class="cloud-meta" id="cloudMeta">Checking status...</div></div><div class="cloud-user" id="cloudUserText">Not logged in</div></div>
         <div class="cloud-pill warn" id="cloudStatusPill">Attention needed</div>
         <div class="cloud-detail" id="cloudStatusDetail">Checking login...</div>
-        <div class="cloud-actions"><button class="btn" type="button" onclick="loadCloudData(true)">Load</button><button class="btn" type="button" onclick="saveCloudData(true)">Save</button><button class="btn btn-danger" type="button" onclick="logOut()">Log out</button></div>
+        <div class="cloud-actions"><button class="btn" type="button" onclick="loadCloudData(true)">Load</button><button class="btn" type="button" onclick="saveCloudData(true)">Save</button><button class="btn" type="button" onclick="recoverPreviousData()" title="Import prior work from the old per-user storage into the shared workspace">Recover previous data</button><button class="btn btn-danger" type="button" onclick="logOut()">Log out</button></div>
       </div>
     </div><button class="btn" onclick="toggleFullscreen()" id="fullscreenBtn">Maximize view</button><button class="btn" onclick="toggleImport()" id="importBtn">Import XLSX</button><button class="btn" onclick="toggleAdd()" id="addBtn">Add Transaction</button><button class="btn" onclick="exportXLSX()" id="exportBtn">Export Summary</button></div>
   </div>
@@ -229,10 +230,10 @@
 </div>
 <div class="toast" id="toast"></div>
 <div class="supabase-error-box" id="supabaseErrorBox"></div>
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 
-<script src="supabase-config.js"></script>
-<script src="supabase-sync.js"></script>
+<script src="supabase-config.js?v=4"></script>
+<script src="supabase-sync.js?v=4"></script>
 
 </body>
 </html>
