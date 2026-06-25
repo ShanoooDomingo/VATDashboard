@@ -897,3 +897,19 @@ table.audit-table td{vertical-align:top}
 .lm-badge{vertical-align:middle;margin-left:4px}
 .lm-badge .column-tooltip{width:max-content;max-width:260px;left:auto;right:0}
 .verification-actions-right .lm-badge .info-icon-btn{width:20px;height:20px;font-size:11px}
+
+/* ===== Journal Entry (blue) & Adjusting Entry (pink) verification statuses ===== */
+.badge-journal{background:#dbeafe;color:#1e3a8a;border-color:#2563eb}
+.badge-adjusting{background:#fce7f3;color:#9d174d;border-color:#db2777}
+.bar-journal{background:#2563eb}
+.bar-adjusting{background:#db2777}
+.pct-journal{color:#2563eb}
+.pct-adjusting{color:#db2777}
+.metric.journal .metric-value{color:#2563eb}
+.metric.adjusting .metric-value{color:#db2777}
+.summary-filter-card.journal .metric-value,.summary-filter-card.journal .metric-sub .summary-card-detail{color:#2563eb!important}
+.summary-filter-card.adjusting .metric-value,.summary-filter-card.adjusting .metric-sub .summary-card-detail{color:#db2777!important}
+.cv-review-dialog .verification-status-select.status-journal{background:#dbeafe!important;color:#1e3a8a!important;border-color:#2563eb!important;box-shadow:inset 0 0 0 1px rgba(37,99,235,.14)!important}
+.cv-review-dialog .verification-status-select.status-adjusting{background:#fce7f3!important;color:#9d174d!important;border-color:#db2777!important;box-shadow:inset 0 0 0 1px rgba(219,39,119,.14)!important}
+.summary-review-modal .summary-status-pill.status-journal{background:#dbeafe;color:#1e3a8a;border-color:#2563eb}
+.summary-review-modal .summary-status-pill.status-adjusting{background:#fce7f3;color:#9d174d;border-color:#db2777}

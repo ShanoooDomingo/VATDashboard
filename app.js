@@ -86,8 +86,13 @@ function dateSortNumber(value){
 }
 function loadArray(key,fallback){try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(err){}return fallback}
 function saveAll(){try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES))}catch(err){}}
-function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';return 'unreviewed'}
-function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';return 'Unreviewed'}
+function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';if(['journal','journal entry','journal-entry','journal_entry','je'].includes(v))return 'journal';if(['adjusting','adjusting entry','adjusting-entry','adjusting_entry','adjustment','aje'].includes(v))return 'adjusting';return 'unreviewed'}
+function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';if(status==='journal')return 'Journal Entry';if(status==='adjusting')return 'Adjusting Entry';return 'Unreviewed'}
+// Journal Entry and Adjusting Entry are intentional postings that do not require
+// invoice / VAT category / ATC / TIN, so they are exempt from incomplete flags.
+function isExemptEntry(t){const s=t&&t.manualStatus;return s==='journal'||s==='adjusting'}
+// Adjusting Entries are additionally excluded from all BIR Compliance Export math.
+function isAdjustingEntry(t){return (t&&t.manualStatus)==='adjusting'}
 function normalizeATC(value){const raw=String(value??'').trim().toUpperCase();if(!raw||raw==='-'||raw==='--'||raw==='N/A'||raw==='NONE')return '';const compact=raw.replace(/[^A-Z0-9]/g,'');const match=compact.match(/^([A-Z]{2})(\d{3})$/);return match?`${match[1]} ${match[2]}`:''}
 function isValidATC(value){const raw=String(value??'').trim();return !raw||Boolean(normalizeATC(raw))}
 function atcText(value){return normalizeATC(value)||'--'}
@@ -174,13 +179,13 @@ function setMonth(key){activeMonth=key;focusedCV=null;activeSummaryReview=null;o
 function renderMonthTabs(){const el=document.getElementById('monthTabs');if(!el)return;if(activeTab==='masters'){el.innerHTML='';el.style.display='none';return}el.style.display='flex';const months=buildMonthBuckets();const keys=new Set(['all',...months.map(m=>m.key)]);if(!keys.has(activeMonth))activeMonth='all';let html=`<button class="month-btn ${activeMonth==='all'?'active':''}" onclick="setMonth('all')">All Months <span>${transactions.length} txns</span></button>`;months.forEach(m=>{html+=`<button class="month-btn ${activeMonth===m.key?'active':''}" onclick="setMonth('${attr(m.key)}')">${esc(m.label)} <span>${monthCount(m.key)} txns</span></button>`});el.innerHTML=html}
 function badge(type,label){return `<span class="badge badge-${type}">${esc(label)}</span>`}
 function vatBadge(type){return type==='VAT-reg'?badge('ok','VAT Registered'):badge('na','Not VAT Registered')}
-function statusBadge(status){if(status==='ok')return badge('ok','Compliant');if(status==='warn')return badge('warn','Without Invoice');if(status==='err')return badge('err','Non-Compliant');return badge('review','Unreviewed')}
+function statusBadge(status){if(status==='ok')return badge('ok','Compliant');if(status==='warn')return badge('warn','Without Invoice');if(status==='err')return badge('err','Non-Compliant');if(status==='journal')return badge('journal','Journal Entry');if(status==='adjusting')return badge('adjusting','Adjusting Entry');return badge('review','Unreviewed')}
 function isBalanced(n){return Math.abs(Number(n||0))<=BALANCE_ALLOWANCE}
 function amountClass(n){return isBalanced(n)?'variance-good':'variance-bad'}
 function varianceBadge(n){const value=Number(n||0);return `<span class="${amountClass(value)}">${peso(value)}</span>`}
 function compactList(values,empty='--'){const seen=[];values.forEach(v=>{const s=String(v??'').trim();if(s&&!seen.includes(s))seen.push(s)});if(!seen.length)return empty;if(seen.length===1)return seen[0];return `Mixed (${seen.length})`}
-function groupStatus(txns){const total=txns.length||1;const ok=txns.filter(t=>t.manualStatus==='ok').length;const warn=txns.filter(t=>t.manualStatus==='warn').length;const err=txns.filter(t=>t.manualStatus==='err').length;const unreviewed=txns.filter(t=>t.manualStatus==='unreviewed').length;const okPct=Math.round(ok/total*100);const warnPct=Math.round(warn/total*100);const errPct=Math.round(err/total*100);const reviewPct=Math.max(0,100-okPct-warnPct-errPct);let status='ok';if(err>0)status='err';else if(warn>0)status='warn';else if(unreviewed>0)status='unreviewed';return{ok,warn,err,unreviewed,okPct,warnPct,errPct,reviewPct,status}}
-function scoreBar(st){return `<div class="bar-wrap"><div class="bar-ok" style="width:${st.okPct}%"></div><div class="bar-warn" style="width:${st.warnPct}%"></div><div class="bar-err" style="width:${st.errPct}%"></div><div class="bar-review" style="width:${st.reviewPct}%"></div></div><div class="pct-row"><span class="pct-ok">${st.ok}</span><span class="pct-warn">${st.warn}</span><span class="pct-err">${st.err}</span><span class="pct-review">${st.unreviewed}</span></div>`}
+function groupStatus(txns){const total=txns.length||1;const ok=txns.filter(t=>t.manualStatus==='ok').length;const warn=txns.filter(t=>t.manualStatus==='warn').length;const err=txns.filter(t=>t.manualStatus==='err').length;const unreviewed=txns.filter(t=>t.manualStatus==='unreviewed').length;const journal=txns.filter(t=>t.manualStatus==='journal').length;const adjusting=txns.filter(t=>t.manualStatus==='adjusting').length;const okPct=Math.round(ok/total*100);const warnPct=Math.round(warn/total*100);const errPct=Math.round(err/total*100);const journalPct=Math.round(journal/total*100);const adjustingPct=Math.round(adjusting/total*100);const reviewPct=Math.max(0,100-okPct-warnPct-errPct-journalPct-adjustingPct);let status='ok';if(err>0)status='err';else if(warn>0)status='warn';else if(unreviewed>0)status='unreviewed';else if(ok>0)status='ok';else if(journal>0)status='journal';else if(adjusting>0)status='adjusting';return{ok,warn,err,unreviewed,journal,adjusting,okPct,warnPct,errPct,journalPct,adjustingPct,reviewPct,status}}
+function scoreBar(st){return `<div class="bar-wrap"><div class="bar-ok" style="width:${st.okPct}%"></div><div class="bar-warn" style="width:${st.warnPct}%"></div><div class="bar-err" style="width:${st.errPct}%"></div><div class="bar-journal" style="width:${st.journalPct||0}%"></div><div class="bar-adjusting" style="width:${st.adjustingPct||0}%"></div><div class="bar-review" style="width:${st.reviewPct}%"></div></div><div class="pct-row"><span class="pct-ok">${st.ok}</span><span class="pct-warn">${st.warn}</span><span class="pct-err">${st.err}</span><span class="pct-journal">${st.journal||0}</span><span class="pct-adjusting">${st.adjusting||0}</span><span class="pct-review">${st.unreviewed}</span></div>`}
 function sumTxns(txns){return txns.reduce((a,t)=>{a.amount+=transactionAmount(t);a.vatable+=t.vatable;a.nonVatable+=t.nonVatable;a.vat+=t.vat;a.total+=t.total;a.ewtAmount+=t.ewtAmount;return a},{amount:0,vatable:0,nonVatable:0,vat:0,total:0,ewtAmount:0})}
 function switchTab(tab){activeTab=tab;if(tab!=='working')focusedCV=null;if(tab!=='summary')activeSummaryReview=null;['summary','working','vat','ewt','bir','masters'].forEach(name=>{const sheetId=name==='working'?'workingSheet':name==='masters'?'mastersSheet':name==='bir'?'birSheet':name+'Sheet';const btnId=name==='working'?'tabWorkingBtn':name==='summary'?'tabSummaryBtn':name==='vat'?'tabVatBtn':name==='ewt'?'tabEwtBtn':name==='bir'?'tabBirBtn':'tabMastersBtn';document.getElementById(sheetId)?.classList.toggle('active',tab===name);document.getElementById(btnId)?.classList.toggle('active',tab===name)});document.getElementById('importPanel').classList.remove('visible');document.getElementById('addPanel').classList.remove('visible');if(tab!=='summary')closeSummaryReviewModal(true);updateActionButtons();renderAll()}
 function switchMasterSub(sub){activeMasterSub=sub;['vatCategories','atcRates','suppliers'].forEach(name=>{const paneId=name==='vatCategories'?'vatCategoriesPane':name==='atcRates'?'atcRatesPane':'suppliersPane';const btnId=name==='vatCategories'?'masterVatCategoriesBtn':name==='atcRates'?'masterAtcRatesBtn':'masterSuppliersBtn';document.getElementById(paneId)?.classList.toggle('active',sub===name);document.getElementById(btnId)?.classList.toggle('active',sub===name)});updateActionButtons();renderAll()}
@@ -506,13 +511,15 @@ function renderSummary(){
   const warnStats=summaryStatusStats(tx,'warn');
   const errStats=summaryStatusStats(tx,'err');
   const unrevStats=summaryStatusStats(tx,'unreviewed');
+  const journalStats=summaryStatusStats(tx,'journal');
+  const adjustingStats=summaryStatusStats(tx,'adjusting');
   const totalAmount=tx.reduce((a,t)=>a+t.total,0);
   const vatAmount=tx.reduce((a,t)=>a+t.vat,0);
   const countToggle=document.getElementById('summaryCountToggle');
   const amountToggle=document.getElementById('summaryAmountToggle');
   if(countToggle)countToggle.classList.toggle('active',summaryViewMode!=='amount');
   if(amountToggle)amountToggle.classList.toggle('active',summaryViewMode==='amount');
-  document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}<div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
+  document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}${summaryMetricCard('journal','Journal Entry','journal',journalStats,total,vatAmount)}${summaryMetricCard('adjusting','Adjusting Entry','adjusting',adjustingStats,total,vatAmount)}<div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
   const labels=summaryLabels(mode);
   const supplierFirst=mode==='supplier';
   const firstHeader=summarySortHeader('first',labels.first,'17%');
@@ -709,6 +716,9 @@ function transactionIncludedInBirVisualWarningScope(t,report){
   return hasTaxClassification(t);
 }
 function transactionReviewReasons(t){
+  // Journal/Adjusting entries are valid without invoice, VAT category, ATC, or TIN,
+  // so they are never flagged as incomplete BIR export blockers.
+  if(isExemptEntry(t))return [];
   const reports=['slpExcel','slpDat','qapExcel','qapDat','purchaseBook','cashBook'];
   const reasons=[];
   reports.forEach(report=>{
@@ -786,7 +796,7 @@ function parseWorkSortDate(value){
 function naturalCompareText(a,b){return String(a??'').localeCompare(String(b??''),undefined,{numeric:true,sensitivity:'base'})}
 // Compliance severity used so Status/Verification columns sort by meaning rather
 // than the raw status keyword: best (Compliant) -> worst (Non-Compliant).
-const STATUS_SORT_PRIORITY={ok:0,warn:1,unreviewed:2,err:3};
+const STATUS_SORT_PRIORITY={ok:0,journal:1,adjusting:2,warn:3,unreviewed:4,err:5};
 function statusSortRank(status){const r=STATUS_SORT_PRIORITY[status];return r===undefined?99:r;}
 // Generic typed comparator. 'date', 'num' and 'status' arrive pre-normalised to
 // numbers so they sort by real value; everything else falls back to natural text.
@@ -957,9 +967,9 @@ function renderCVReviewModal(){
   content.innerHTML=`<div class="detail-inner review-workspace" data-cv="${attr(g.cv)}"><div class="review-workspace-header"><div class="review-workspace-title"><div class="review-title-main" id="cvReviewTitle"><span class="review-cv">${esc(g.cv)}</span><span class="review-voucher">${esc(g.voucherNames)}</span></div><div class="review-chips"><span class="review-chip"><strong>Date</strong> ${esc(g.dateDisplay||'--')}</span><span class="review-chip"><strong>Lines</strong> ${g.txns.length}</span><span class="review-chip"><strong>VAT</strong> ${peso(g.bookVat)}</span><span class="review-chip"><strong>EWT</strong> ${peso(g.bookEwt)}</span><span class="review-chip"><strong>Total</strong> ${peso(cvTotal)}</span></div></div><div class="review-actions"><button type="button" class="cv-review-close" data-close-cv-review aria-label="Close CV verification">×</button></div></div><div class="cv-review-body">${workingDetailTable(g)}</div></div>`;
 }
 function closeCVReviewModal(){focusedCV=null;openCVs.clear();renderWorking()}
-function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(s==='ok'?'ok':s==='warn'?'warn':s==='err'?'err':'unreviewed')}
+function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(['ok','warn','err','journal','adjusting'].includes(s)?s:'unreviewed')}
 function applyVerificationStatusClass(el){if(!el)return;el.classList.remove('status-ok','status-warn','status-err','status-unreviewed');el.classList.add(verificationStatusClass(el.value))}
-function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant']];const cls=verificationStatusClass(t.manualStatus);return `<select class="select-small wp-status wp-autosave verification-status-select ${cls}" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
+function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant'],['journal','Journal Entry'],['adjusting','Adjusting Entry']];const cls=verificationStatusClass(t.manualStatus);return `<select class="select-small wp-status wp-autosave verification-status-select ${cls}" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
 function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.address);if(t.city)parts.push(t.city);if(t.zip)parts.push(t.zip);return parts.length?parts.join(', '):'--'}
 function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !/^[A-Za-z0-9 .,&()'\/-]*$/.test(v)}
 function supplierSpecialIssues(obj){const checks=[['supplier','Registered Name'],['registeredName','Registered Name'],['lastName','Registered Last Name'],['firstName','Registered First Name'],['middleName','Registered Middle Name'],['address','Registered Address'],['city','City'],['zip','ZIP Code']];const seen=new Set();const issues=[];checks.forEach(([key,label])=>{if(seen.has(label))return;const val=obj?.[key];if(supplierFieldHasSpecial(val)){seen.add(label);issues.push(label)}});return issues}
@@ -1165,8 +1175,10 @@ function slpExcelNameFields(t){
 function hasVatCategoryCode(t){return Boolean(normalizeVATCategory(t?.vatCategory))}
 function hasAtcCode(t){return atcText(t?.atcCode)!=='--'}
 function hasTaxClassification(t){return hasVatCategoryCode(t)||hasAtcCode(t)}
+// Adjusting Entries are excluded from every BIR Compliance Export calculation.
+function birEligibleTransactions(){return visibleTransactionsForMonth().filter(t=>!isAdjustingEntry(t));}
 function birNonCashSourceRows(){
-  return visibleTransactionsForMonth().filter(t=>hasTaxClassification(t));
+  return birEligibleTransactions().filter(t=>hasTaxClassification(t));
 }
 function birExcludedTaxClassificationRows(){
   return visibleTransactionsForMonth().filter(t=>!hasTaxClassification(t));
@@ -1397,11 +1409,13 @@ function requireSingleMonthForBIR(label){
   return true;
 }
 function birSourceRows(){return birNonCashSourceRows()}
-function birCashSourceRows(){return visibleTransactionsForMonth()}
+function birCashSourceRows(){return birEligibleTransactions()}
 function ewtSourceRows(){return birNonCashSourceRows().filter(t=>hasAtcCode(t)||Number(t.ewtAmount||0)>0)}
 function birIssueKey(issue){return [issue.cv,issue.voucher,issue.invoice,issue.message].map(v=>String(v||'')).join('|')}
 function dedupeBirIssues(issues){const seen=new Set();return (issues||[]).filter(i=>{const key=birIssueKey(i);if(seen.has(key))return false;seen.add(key);return true;});}
 function birTransactionBlockersForReport(t,report){
+  // Exempt entries carry no field requirements and never block an export.
+  if(isExemptEntry(t))return [];
   const missing=[];
   if(!String(t.date||'').trim()||String(t.date||'').trim()==='--')missing.push('date');
   if(!String(t.cv||'').trim())missing.push('CV No.');

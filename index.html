@@ -74,13 +74,13 @@
       <div class="form-group"><label>Description</label><input type="text" id="f_desc" placeholder="Nature of expense"/></div>
       <div class="form-group"><label>Accounting Title * <span class="muted">(line level)</span></label><input type="text" id="f_accounting_title" placeholder="e.g. Office Supplies Expense"/></div>
       <div class="form-group"><label>Bank Account *</label><input type="text" id="f_bank_account" placeholder="e.g. BDO Checking 1234"/></div>
-      <div class="form-group"><label>Amount</label><input type="text" id="f_amount" placeholder="â‚± 100,000.00" oninput="updateTaxPreview('f')"/></div>
+      <div class="form-group"><label>Amount</label><input type="text" id="f_amount" placeholder="₱ 100,000.00" oninput="updateTaxPreview('f')"/></div>
       <div class="form-group"><label>VAT Category Code</label><select id="f_vat_category" onchange="updateTaxPreview('f')"><option value="">Select code</option><option value="S">S - Vatable services</option><option value="G">G - Vatable goods</option><option value="I">I - Vatable importation</option><option value="CG">CG - Vatable capital goods</option><option value="SNQ">SNQ - Non-VAT services</option><option value="GNQ">GNQ - Non-VAT goods</option></select></div><div class="form-group"><label>VAT amount (computed)</label><input type="text" id="f_vat" placeholder="Auto-computed" readonly/></div>
-      <div class="form-group"><label>Total amount</label><input type="text" id="f_total" placeholder="â‚± auto if blank"/></div>
+      <div class="form-group"><label>Total amount</label><input type="text" id="f_total" placeholder="₱ auto if blank"/></div>
       <div class="form-group"><label>ATC Code</label><select id="f_atc_code" onchange="updateTaxPreview('f')"><option value="">Select ATC Code</option></select></div>
       <div class="form-group"><label>EWT amount (computed)</label><input type="text" id="f_ewt_amount" placeholder="Auto-computed" readonly/></div>
       <div class="form-group"><label>VAT type (auto)</label><input type="text" id="f_vat_type" value="Not provided" readonly/></div>
-      <div class="form-group"><label>Verification</label><select id="f_status"><option value="unreviewed">Unreviewed</option><option value="ok">Compliant</option><option value="warn">Without Invoice</option><option value="err">Non-Compliant</option></select></div>
+      <div class="form-group"><label>Verification</label><select id="f_status"><option value="unreviewed">Unreviewed</option><option value="ok">Compliant</option><option value="warn">Without Invoice</option><option value="err">Non-Compliant</option><option value="journal">Journal Entry</option><option value="adjusting">Adjusting Entry</option></select></div>
       <div class="form-group full"><label>Review note</label><textarea id="f_note" placeholder="Optional note about invoice or RR 7-2024 check"></textarea></div>
     </div>
     <div class="form-actions"><button class="btn btn-primary" onclick="addTransaction()">Add transaction</button><button class="btn" onclick="addFiveTestTransactions()">Add 5 test rows</button><button class="btn" onclick="toggleAdd()">Cancel</button></div>
@@ -91,7 +91,7 @@
     <div class="metrics" id="summaryMetrics"></div>
     <div class="sheet-note">This summary is derived from Purchase Transactions and the selected month. Uploading and manual verification are handled in Purchase Transactions.</div>
     <div class="controls"><div class="search-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="summarySearch" placeholder="Search supplier, TIN, CV, invoice, or description..." oninput="renderAll()"/></div><select id="summaryGroup" onchange="renderAll()"><option value="supplier">Consolidate by Registered Supplier</option><option value="cv">Consolidate by CV Number</option></select><select id="summaryVatType" onchange="renderAll()"><option value="">All VAT types</option><option value="VAT-reg">VAT Registered</option><option value="Non-VAT">Not VAT Registered</option></select></div>
-    <div class="legend"><div class="leg"><div class="leg-dot" style="background:var(--ok)"></div>Compliant</div><div class="leg"><div class="leg-dot" style="background:#f0c040"></div>Without Invoice</div><div class="leg"><div class="leg-dot" style="background:#d94040"></div>Non-Compliant</div><div class="leg"><div class="leg-dot" style="background:#94a3b8"></div>Unreviewed</div></div>
+    <div class="legend"><div class="leg"><div class="leg-dot" style="background:var(--ok)"></div>Compliant</div><div class="leg"><div class="leg-dot" style="background:#f0c040"></div>Without Invoice</div><div class="leg"><div class="leg-dot" style="background:#d94040"></div>Non-Compliant</div><div class="leg"><div class="leg-dot" style="background:#94a3b8"></div>Unreviewed</div><div class="leg"><div class="leg-dot" style="background:#2563eb"></div>Journal Entry</div><div class="leg"><div class="leg-dot" style="background:#db2777"></div>Adjusting Entry</div></div>
     <div class="table-wrap"><table><thead id="summaryThead"></thead><tbody id="summaryTbody"></tbody><tfoot id="summaryTfoot"></tfoot></table></div>
   </section>
 
@@ -122,10 +122,10 @@
       <div class="form-group">
         <label>Report preview</label>
         <select id="birReportSelect" onchange="selectBirReport(this.value)">
-          <option value="slpExcel">Summary List of Purchases â€” Excel</option>
-          <option value="slpDat">Summary List of Purchases â€” DAT</option>
-          <option value="qapExcel">QAP 1601EQ Schedule 1 â€” Excel</option>
-          <option value="qapDat">QAP 1601EQ Schedule 1 â€” DAT</option>
+          <option value="slpExcel">Summary List of Purchases - Excel</option>
+          <option value="slpDat">Summary List of Purchases - DAT</option>
+          <option value="qapExcel">QAP 1601EQ Schedule 1 - Excel</option>
+          <option value="qapDat">QAP 1601EQ Schedule 1 - DAT</option>
           <option value="purchaseBook">Subsidiary Purchase Book</option>
           <option value="cashBook">Cash Disbursement Book</option>
         </select>
