@@ -40,15 +40,16 @@
         <div class="cloud-detail" id="cloudStatusDetail">Checking login...</div>
         <div class="cloud-actions"><button class="btn" type="button" onclick="loadCloudData(true)">Load</button><button class="btn" type="button" onclick="saveCloudData(true)">Save</button><button class="btn" type="button" onclick="recoverPreviousData()" title="Import prior work from the old per-user storage into the shared workspace">Recover previous data</button><button class="btn btn-danger" type="button" onclick="logOut()">Log out</button></div>
       </div>
-    </div><button class="btn" onclick="toggleFullscreen()" id="fullscreenBtn">Maximize view</button><button class="btn" onclick="toggleImport()" id="importBtn">Import XLSX</button><button class="btn" onclick="toggleAdd()" id="addBtn">Add Transaction</button><button class="btn" onclick="exportXLSX()" id="exportBtn">Export Summary</button></div>
+    </div><button class="btn" onclick="toggleImport()" id="importBtn">Import XLSX</button><button class="btn" onclick="toggleAdd()" id="addBtn">Add Transaction</button><button class="btn" onclick="exportXLSX()" id="exportBtn">Export Summary</button></div>
   </div>
   <div class="tabs"><button class="tab-btn active" id="tabSummaryBtn" onclick="switchTab('summary')">Compliance Summary</button><button class="tab-btn" id="tabWorkingBtn" onclick="switchTab('working')">Purchase Transactions</button><button class="tab-btn" id="tabVatBtn" onclick="switchTab('vat')">VAT Balances</button><button class="tab-btn" id="tabEwtBtn" onclick="switchTab('ewt')">EWT Balances</button><button class="tab-btn" id="tabBirBtn" onclick="switchTab('bir')">BIR Compliance Exports</button><button class="tab-btn" id="tabMastersBtn" onclick="switchTab('masters')">Master Data</button><button class="tab-btn audit-tab-btn" id="tabAuditBtn" onclick="openAuditTrail()" style="display:none">Audit Trail</button></div>
   <div class="month-tabs" id="monthTabs"></div>
 
   <div class="panel" id="importPanel">
     <h3>Import XLSX for Purchase Transactions</h3>
+    <div class="helper-text"><strong>QuickBooks working papers are detected automatically.</strong> Just upload the generated <em>Transaction Detail by Account</em> (purchases), <em>VAT Summary / Tax Detail Report</em>, or withholding <em>Transaction Report</em> — the system identifies the file type and maps the columns for you. The Import type below is only used for non-QuickBooks template files.</div>
     <p id="importHelp"></p>
-    <div class="form-grid"><div class="form-group"><label>Import type</label><select id="importType" onchange="updateImportHelp()"><option value="book">Purchase transactions / verification sheet</option><option value="vatLedger">VAT Balances</option><option value="ewtLedger">EWT Balances</option><option value="vatCategoryMaster">VAT Categories</option><option value="atcMaster">ATC Master / Database EWT Rates</option><option value="supplierMaster">Supplier Master</option></select></div><div class="form-group"><label>Import mode</label><label class="inline-check"><input type="checkbox" id="replaceOnImport"/> Replace existing data for this import type</label></div></div>
+    <div class="form-grid"><div class="form-group"><label>Import type (template files only)</label><select id="importType" onchange="updateImportHelp()"><option value="book">Purchase transactions / verification sheet</option><option value="vatLedger">VAT Balances</option><option value="ewtLedger">EWT Balances</option><option value="vatCategoryMaster">VAT Categories</option><option value="atcMaster">ATC Master / Database EWT Rates</option><option value="supplierMaster">Supplier Master</option></select></div><div class="form-group"><label>Import mode</label><label class="inline-check"><input type="checkbox" id="replaceOnImport"/> Replace existing data for this import type</label></div></div>
     <div class="drop-zone" id="dropZone" onclick="document.getElementById('xlsxInput').click()"><p>Drop your XLSX file here or click to browse</p><span>Supports .xlsx files only</span></div>
     <input type="file" id="xlsxInput" accept=".xlsx,.xls" onchange="handleXLSX(event)"/>
     <div class="form-actions" style="margin-top:10px"><button class="btn" onclick="downloadTemplate()">Download XLSX template</button><button class="btn" onclick="toggleImport()">Close</button></div>
@@ -57,31 +58,19 @@
 
   <div class="panel" id="addPanel">
     <h3>Add purchase transaction</h3>
-    <div class="helper-text"><strong>Minimum to add a draft row:</strong> Voucher name and CV no. Tax codes may be completed during verification. VAT/EWT amounts are computed from Amount + VAT Category and ATC Code once those codes are selected.</div>
+    <div class="helper-text"><strong>Minimum to add a draft row:</strong> Voucher name and CV no. Supplier details are pulled from Master Data via the TIN. VAT, EWT, Total, and Verification are computed/handled on the transaction line.</div>
     <div class="form-grid">
-      <div class="form-group"><label>Voucher name *</label><input type="text" id="f_voucher" placeholder="e.g. Petty Cash Voucher - Jan"/></div>
-      <div class="form-group"><label>Registered supplier / payee from docs</label><input type="text" id="f_supplier" placeholder="Auto-filled from TIN or entered manually"/></div>
-      <div class="form-group"><label>Supplier TIN</label><input type="text" id="f_tin" placeholder="Enter TIN to auto-fill supplier" oninput="queueSupplierLookupForAdd()" onblur="autoLookupSupplierForAdd(false)"/></div>
-      <div class="form-group"><label>Registered last name</label><input type="text" id="f_last" placeholder="Auto-filled if individual"/></div>
-      <div class="form-group"><label>Registered first name</label><input type="text" id="f_first" placeholder="Auto-filled if individual"/></div>
-      <div class="form-group"><label>Registered middle name</label><input type="text" id="f_middle" placeholder="Optional"/></div>
-      <div class="form-group"><label>Registered address</label><input type="text" id="f_address" placeholder="Auto-filled from supplier master"/></div>
-      <div class="form-group"><label>City</label><input type="text" id="f_city" placeholder="City"/></div>
-      <div class="form-group"><label>ZIP Code</label><input type="text" id="f_zip" placeholder="ZIP"/></div>
-      <div class="form-group"><label>CV no. *</label><input type="text" id="f_cv" placeholder="CV-0001"/></div>
-      <div class="form-group"><label>Invoice / OR no.</label><input type="text" id="f_inv" placeholder="SI-10001 or blank"/></div>
       <div class="form-group"><label>Date</label><input type="text" id="f_date" placeholder="MM/DD/YYYY"/></div>
+      <div class="form-group"><label>CV no. *</label><input type="text" id="f_cv" placeholder="CV-0001"/></div>
+      <div class="form-group"><label>Voucher name *</label><input type="text" id="f_voucher" placeholder="e.g. Petty Cash Voucher - Jan"/></div>
       <div class="form-group"><label>Description</label><input type="text" id="f_desc" placeholder="Nature of expense"/></div>
-      <div class="form-group"><label>Accounting Title * <span class="muted">(line level)</span></label><input type="text" id="f_accounting_title" placeholder="e.g. Office Supplies Expense"/></div>
-      <div class="form-group"><label>Bank Account *</label><input type="text" id="f_bank_account" placeholder="e.g. BDO Checking 1234"/></div>
-      <div class="form-group"><label>Amount</label><input type="text" id="f_amount" placeholder="₱ 100,000.00" oninput="updateTaxPreview('f')"/></div>
-      <div class="form-group"><label>VAT Category Code</label><select id="f_vat_category" onchange="updateTaxPreview('f')"><option value="">Select code</option><option value="S">S - Vatable services</option><option value="G">G - Vatable goods</option><option value="I">I - Vatable importation</option><option value="CG">CG - Vatable capital goods</option><option value="SNQ">SNQ - Non-VAT services</option><option value="GNQ">GNQ - Non-VAT goods</option></select></div><div class="form-group"><label>VAT amount (computed)</label><input type="text" id="f_vat" placeholder="Auto-computed" readonly/></div>
-      <div class="form-group"><label>Total amount</label><input type="text" id="f_total" placeholder="₱ auto if blank"/></div>
-      <div class="form-group"><label>ATC Code</label><select id="f_atc_code" onchange="updateTaxPreview('f')"><option value="">Select ATC Code</option></select></div>
-      <div class="form-group"><label>EWT amount (computed)</label><input type="text" id="f_ewt_amount" placeholder="Auto-computed" readonly/></div>
-      <div class="form-group"><label>VAT type (auto)</label><input type="text" id="f_vat_type" value="Not provided" readonly/></div>
-      <div class="form-group"><label>Verification</label><select id="f_status"><option value="unreviewed">Unreviewed</option><option value="ok">Compliant</option><option value="warn">Without Invoice</option><option value="err">Non-Compliant</option><option value="journal">Journal Entry</option><option value="adjusting">Adjusting Entry</option></select></div>
-      <div class="form-group full"><label>Review note</label><textarea id="f_note" placeholder="Optional note about invoice or RR 7-2024 check"></textarea></div>
+      <div class="form-group"><label>Accounting Title <span class="muted">(line level)</span></label><input type="text" id="f_accounting_title" placeholder="e.g. Office Supplies Expense"/></div>
+      <div class="form-group"><label>Bank Account</label><input type="text" id="f_bank_account" placeholder="e.g. BDO Checking 1234"/></div>
+      <div class="form-group"><label>Amount</label><input type="text" id="f_amount" placeholder="₱ 100,000.00"/></div>
+      <div class="form-group"><label>VAT Category Code</label><select id="f_vat_category"><option value="">Select code</option><option value="S">S - Vatable services</option><option value="G">G - Vatable goods</option><option value="I">I - Vatable importation</option><option value="CG">CG - Vatable capital goods</option><option value="SNQ">SNQ - Non-VAT services</option><option value="GNQ">GNQ - Non-VAT goods</option></select></div>
+      <div class="form-group"><label>ATC Code</label><select id="f_atc_code"><option value="">Select ATC Code</option></select></div>
+      <div class="form-group"><label>Invoice / OR no.</label><input type="text" id="f_inv" placeholder="SI-10001 or blank"/></div>
+      <div class="form-group"><label>Supplier TIN</label><input type="text" id="f_tin" placeholder="Enter TIN to link Supplier Master" oninput="queueSupplierLookupForAdd()" onblur="autoLookupSupplierForAdd(false)"/></div>
     </div>
     <div class="form-actions"><button class="btn btn-primary" onclick="addTransaction()">Add transaction</button><button class="btn" onclick="addFiveTestTransactions()">Add 5 test rows</button><button class="btn" onclick="toggleAdd()">Cancel</button></div>
   </div>

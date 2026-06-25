@@ -190,8 +190,6 @@ function sumTxns(txns){return txns.reduce((a,t)=>{a.amount+=transactionAmount(t)
 function switchTab(tab){activeTab=tab;if(tab!=='working')focusedCV=null;if(tab!=='summary')activeSummaryReview=null;['summary','working','vat','ewt','bir','masters'].forEach(name=>{const sheetId=name==='working'?'workingSheet':name==='masters'?'mastersSheet':name==='bir'?'birSheet':name+'Sheet';const btnId=name==='working'?'tabWorkingBtn':name==='summary'?'tabSummaryBtn':name==='vat'?'tabVatBtn':name==='ewt'?'tabEwtBtn':name==='bir'?'tabBirBtn':'tabMastersBtn';document.getElementById(sheetId)?.classList.toggle('active',tab===name);document.getElementById(btnId)?.classList.toggle('active',tab===name)});document.getElementById('importPanel').classList.remove('visible');document.getElementById('addPanel').classList.remove('visible');if(tab!=='summary')closeSummaryReviewModal(true);updateActionButtons();renderAll()}
 function switchMasterSub(sub){activeMasterSub=sub;['vatCategories','atcRates','suppliers'].forEach(name=>{const paneId=name==='vatCategories'?'vatCategoriesPane':name==='atcRates'?'atcRatesPane':'suppliersPane';const btnId=name==='vatCategories'?'masterVatCategoriesBtn':name==='atcRates'?'masterAtcRatesBtn':'masterSuppliersBtn';document.getElementById(paneId)?.classList.toggle('active',sub===name);document.getElementById(btnId)?.classList.toggle('active',sub===name)});updateActionButtons();renderAll()}
 function updateActionButtons(){const canImport=['working','vat','ewt','masters'].includes(activeTab);document.getElementById('importBtn').style.display=canImport?'inline-flex':'none';document.getElementById('addBtn').style.display=activeTab==='working'?'inline-flex':'none';let label='Export Summary';if(activeTab==='working')label='Export Purchases';else if(activeTab==='vat')label='Export VAT Balances';else if(activeTab==='ewt')label='Export EWT Balances';else if(activeTab==='bir')label='Export BIR Index';else if(activeTab==='masters')label=activeMasterSub==='vatCategories'?'Export VAT Categories':activeMasterSub==='atcRates'?'Export ATC Master':'Export Supplier Master';document.getElementById('exportBtn').textContent=label}
-function toggleFullscreen(){const root=document.documentElement;if(!document.fullscreenElement&&root.requestFullscreen){root.requestFullscreen().then(()=>showToast('Full-screen view enabled.')).catch(()=>showToast('Open the HTML file in a browser to use full-screen mode.'))}else if(document.exitFullscreen){document.exitFullscreen().then(()=>showToast('Full-screen view exited.')).catch(()=>{})}else showToast('Open the HTML file in a browser to use full-screen mode.')}
-document.addEventListener('fullscreenchange',()=>{document.getElementById('fullscreenBtn').textContent=document.fullscreenElement?'Exit full screen':'Maximize view'});
 function toggleImport(){if(activeTab==='summary')switchTab('working');document.getElementById('importPanel').classList.toggle('visible');document.getElementById('addPanel').classList.remove('visible');let type='book';if(activeTab==='vat')type='vatLedger';else if(activeTab==='ewt')type='ewtLedger';else if(activeTab==='masters')type=activeMasterSub==='vatCategories'?'vatCategoryMaster':activeMasterSub==='atcRates'?'atcMaster':'supplierMaster';document.getElementById('importType').value=type;updateImportHelp()}
 function toggleAdd(){if(activeTab!=='working')switchTab('working');document.getElementById('addPanel').classList.toggle('visible');document.getElementById('importPanel').classList.remove('visible')}
 function activeMonthLabel(){if(activeMonth==='all')return 'All Months';const found=buildMonthBuckets().find(m=>m.key===activeMonth);return found?found.label:activeMonth}
@@ -221,6 +219,8 @@ function queueSupplierLookupForAdd(){clearTimeout(addSupplierLookupTimer);addSup
 function addTransaction(){
   const voucherName=getValue('f_voucher'), cv=getValue('f_cv');
   if(!voucherName||!cv){showToast('Please fill in Voucher name and CV no.');return}
+  const date=requireMMDDYYYY(getValue('f_date'),'Manual transaction date');
+  if(!date)return;
   const amount=readMoney('f_amount');
   const vatCategory=normalizeVATCategory(getValue('f_vat_category'));
   const atcCode=normalizeATC(getValue('f_atc_code'));
@@ -228,20 +228,16 @@ function addTransaction(){
   const vatable=taxableBaseFromAmount(amount,vatCategory);
   const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
   const vat=vatCategory?computeVATFromCategory(vatable,vatCategory):0;
-  let total=readMoney('f_total');
-  if(!total)total=amount+vat;
-  const status=parseVerification(getValue('f_status'));
-  let inv=getValue('f_inv'), supplier=getValue('f_supplier'), tin=getValue('f_tin');
-  const addMaster=tin?findSupplierByTIN(tin):null;
-  if(tin&&!addMaster)showToast('No supplier found for this TIN in Supplier Master. You can still save as draft or add the supplier master record later.');
-  if(addMaster){applySupplierFields('f',addMaster);supplier=getValue('f_supplier');tin=getValue('f_tin')}
-  if(status==='ok'&&(!inv||!supplier||!tin)){showToast('For Compliant, fill in Registered supplier, TIN, and invoice number.');return}
-  const date=requireMMDDYYYY(getValue('f_date'),'Manual transaction date');
-  if(!date)return;
-  const newRow=normalizeTransaction({_id:makeId('tx'),voucherName,supplier,tin,cv,inv,date,description:getValue('f_desc'),accountingTitle:getValue('f_accounting_title'),bankAccount:getValue('f_bank_account'),amount,vatable,nonVatable,vatCategory,total,atcCode,manualStatus:status,reviewNote:getValue('f_note'),lastReviewed:new Date().toISOString(),lastName:getValue('f_last'),firstName:getValue('f_first'),middleName:getValue('f_middle'),address:getValue('f_address'),city:getValue('f_city'),zip:getValue('f_zip')});
+  const total=amount+vat; // Total, VAT, EWT and Verification are computed/handled on the transaction line.
+  const inv=getValue('f_inv'), tin=getValue('f_tin');
+  // Supplier details come from Master Data via the TIN, not from this form.
+  const master=tin?findSupplierByTIN(tin):null;
+  if(tin&&!master)showToast('No supplier found for this TIN in Supplier Master. You can add the supplier master record later.');
+  const base=normalizeTransaction({_id:makeId('tx'),voucherName,supplier:master?supplierDisplayName(master):'',tin,cv,inv,date,description:getValue('f_desc'),accountingTitle:getValue('f_accounting_title'),bankAccount:getValue('f_bank_account'),amount,vatable,nonVatable,vatCategory,total,atcCode,manualStatus:'unreviewed',lastReviewed:new Date().toISOString()});
+  const newRow=master?applySupplierToTransaction(base,master):base;
   transactions.push(newRow);
-  ['f_voucher','f_supplier','f_tin','f_last','f_first','f_middle','f_address','f_city','f_zip','f_cv','f_inv','f_date','f_desc','f_accounting_title','f_bank_account','f_amount','f_total','f_atc_code','f_note'].forEach(id=>setValue(id,''));
-  setValue('f_vat_category','');setValue('f_status','unreviewed');updateTaxPreview('f');
+  ['f_voucher','f_tin','f_cv','f_inv','f_date','f_desc','f_accounting_title','f_bank_account','f_amount'].forEach(id=>setValue(id,''));
+  setValue('f_vat_category','');setValue('f_atc_code','');
   activeTab='working';
   activeMonth='all';
   if(document.getElementById('workSearch'))document.getElementById('workSearch').value='';
@@ -284,6 +280,108 @@ function pick(row,...keys){for(const key of keys){const k=headerKey(key);if(row[
 function ensureXLSX(){if(window.XLSX&&XLSX.utils&&XLSX.writeFile)return true;showToast('XLSX engine is not loaded. Please connect to the internet or use a packaged copy of xlsx.full.min.js.');return false}
 function preferredSheetName(type,wb){const names=wb.SheetNames||[];const targets={book:['Purchase Transactions','Purchases','Transactions'],vatLedger:['VAT Balances','VAT Ledger'],ewtLedger:['EWT Balances','EWT Ledger'],vatCategoryMaster:['VAT Categories'],atcMaster:['ATC Master'],supplierMaster:['Supplier Master']};const wanted=targets[type]||[];const match=names.find(n=>wanted.some(w=>n.toLowerCase()===w.toLowerCase()))||names[0];return match}
 function workbookRows(wb,type){const sheetName=preferredSheetName(type,wb);const ws=wb.Sheets[sheetName];if(!ws)return[];return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false}).filter(r=>r.some(v=>String(v??'').trim()!==''))}
+/* ============================================================================
+ * QuickBooks working-paper auto-import.
+ * Detects and maps the real QuickBooks reports (Transaction Detail by Account,
+ * Tax Detail / VAT Summary Report, Withholding Transaction Report) so users can
+ * upload the generated working papers directly without a custom template. The
+ * mapped rows are handed to importRows(), which keeps all validation and the
+ * record-building logic in one place.
+ * ========================================================================== */
+function qbCellText(v){return String(v??'').replace(/\s+/g,' ').trim();}
+function qbNorm(v){return qbCellText(v).toLowerCase().replace(/\.$/,'');} // normalise header label ("No." -> "no")
+function qbTypeLabel(type){return ({book:'Purchase Transactions',vatLedger:'VAT Balances',ewtLedger:'EWT Balances'})[type]||type;}
+function qbFindHeaderRow(rows){
+  for(let i=0;i<Math.min(rows.length,20);i++){
+    const toks=(rows[i]||[]).map(qbNorm);
+    if(toks.includes('date')&&toks.includes('name')&&toks.includes('no')) return i;
+  }
+  return -1;
+}
+function qbColMap(headerRow){
+  const map={};
+  (headerRow||[]).forEach((cell,idx)=>{const k=qbNorm(cell);if(k&&map[k]===undefined)map[k]=idx;});
+  return map;
+}
+function qbRecognizeType(colmap,contextText){
+  // First trust strong column signals; then fall back to the report title/sheet
+  // name so a QuickBooks file is still recognised (and validated) even if a
+  // required column was renamed or removed.
+  const has=k=>colmap[k]!==undefined;
+  if(has('tax name')) return 'vatLedger';
+  if(has('account')&&has('split')&&has('debit')&&has('credit')) return has('balance')?'book':'ewtLedger';
+  const ctx=String(contextText||'').toLowerCase();
+  if(/vat summary report|tax detail report/.test(ctx)) return 'vatLedger';
+  if(/transaction detail by account/.test(ctx)) return 'book';
+  if(/withholding/.test(ctx)) return 'ewtLedger';
+  return null;
+}
+function qbIsSkippableAccount(account){
+  // In "Transaction Detail by Account", the cash funding side and the tax lines
+  // are captured by the separate VAT/EWT working papers, not as purchase rows.
+  const a=String(account||'').toLowerCase();
+  return a.startsWith('cash in bank')||a.includes('vat summary report')||a.includes('withholding tax');
+}
+function parseQuickBooksWorkbook(wb){
+  if(!wb||!wb.SheetNames||!wb.SheetNames.length) return null;
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  if(!ws) return null;
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+  const hi=qbFindHeaderRow(rows);
+  // Title/sheet context (rows above the header) lets us recognise the report type
+  // even when columns are renamed; used for clear validation messages.
+  const titleRows=hi>=0?rows.slice(0,hi):rows.slice(0,6);
+  const contextText=titleRows.map(r=>(r||[]).map(qbCellText).join(' ')).join(' ')+' '+(wb.SheetNames[0]||'');
+  const colmap=hi>=0?qbColMap(rows[hi]):{};
+  const type=qbRecognizeType(colmap,contextText);
+  if(!type) return null;
+  if(hi<0) return {error:true,type,message:`This looks like a QuickBooks ${qbTypeLabel(type)} file, but the column header row (with Date, No., Name…) could not be found. Export the standard QuickBooks report without deleting the header rows.`};
+  const idxOf=(...names)=>{for(const n of names){if(colmap[n]!==undefined)return colmap[n];}return undefined;};
+  const getv=(r,...names)=>{const i=idxOf(...names);return i===undefined?'':qbCellText((r||[])[i]);};
+  // Required QuickBooks columns per report (each entry lists accepted aliases).
+  const required={
+    book:[['date'],['no'],['name'],['account'],['split'],['debit']],
+    vatLedger:[['date'],['no'],['name'],['tax name'],['amount']],
+    ewtLedger:[['date'],['no'],['name'],['credit']]
+  }[type];
+  const missing=required.filter(alts=>!alts.some(a=>colmap[a]!==undefined)).map(alts=>alts[0]);
+  if(missing.length) return {error:true,type,message:`This looks like a QuickBooks ${qbTypeLabel(type)} file, but these required columns were not found: ${missing.join(', ')}. Export the standard QuickBooks report without removing or renaming columns.`};
+  const data=rows.slice(hi+1);
+  let header, built=[];
+  if(type==='book'){
+    header=['date','cv_no','voucher_name','registered_name','description','accounting_title','bank_account','amount','invoice_no','tin'];
+    data.forEach(r=>{
+      const date=getv(r,'date'); if(!date) return;            // skip section/total/footer/blank rows
+      const account=getv(r,'account'); if(qbIsSkippableAccount(account)) return;
+      const amount=parseMoney(getv(r,'debit'))||parseMoney(getv(r,'credit')); if(!amount) return;
+      const name=getv(r,'name');
+      built.push([date,getv(r,'no'),name,name,getv(r,'memo/description','memo'),account,getv(r,'split'),Math.abs(amount),'','']);
+    });
+  }else if(type==='vatLedger'){
+    header=['cv_no','supplier_name','date','vat_amount','ledger_account','reference'];
+    data.forEach(r=>{
+      const date=getv(r,'date'); if(!date) return;
+      if(getv(r,'tax name').toLowerCase()!=='tax (purchases)') return; // input VAT (purchases) only
+      const amt=parseMoney(getv(r,'amount')); if(!amt) return;
+      built.push([getv(r,'no'),getv(r,'name'),date,Math.abs(amt),'Input VAT',getv(r,'no')]);
+    });
+  }else{ // ewtLedger
+    header=['cv_no','supplier_name','date','ewt_amount','ledger_account','reference'];
+    data.forEach(r=>{
+      const date=getv(r,'date'); if(!date) return;
+      const amt=parseMoney(getv(r,'credit'))||parseMoney(getv(r,'debit')); if(!amt) return;
+      built.push([getv(r,'no'),getv(r,'name'),date,Math.abs(amt),getv(r,'account')||'Withholding Tax - Expanded',getv(r,'no')]);
+    });
+  }
+  if(!built.length) return {error:true,type,message:`Detected a QuickBooks ${qbTypeLabel(type)} file, but found no ${type==='book'?'expense':type==='vatLedger'?'input VAT (Tax on Purchases)':'withholding'} lines to import.`};
+  return {type,syntheticRows:[header,...built],count:built.length};
+}
+function showQbValidationError(qb){
+  const box=document.getElementById('importIssueReport');
+  if(box){box.innerHTML=`<strong>QuickBooks import could not continue.</strong><div>${importHtmlEscape(qb.message)}</div>`;box.style.display='block';}
+  const panel=document.getElementById('importPanel'); if(panel)panel.classList.add('visible');
+  showToast(qb.message);
+}
 function handleXLSX(e){
   if(!ensureXLSX())return;
   clearImportIssueReport();
@@ -294,6 +392,16 @@ function handleXLSX(e){
     let wb;
     try{wb=XLSX.read(ev.target.result,{type:'array',cellDates:false})}
     catch(err){showToast('Unable to read XLSX file. Please check the workbook format.');return}
+    // Auto-detect a QuickBooks working paper first; fall back to the template format.
+    let qb=null;
+    try{qb=parseQuickBooksWorkbook(wb)}catch(err){qb=null}
+    if(qb&&qb.error){showQbValidationError(qb);return;}
+    if(qb&&qb.type){
+      const sel=document.getElementById('importType'); if(sel){sel.value=qb.type;updateImportHelp();}
+      importRows(qb.syntheticRows,qb.type,e.target,file.name||'uploaded file');
+      showToast(`Detected QuickBooks ${qbTypeLabel(qb.type)} file — mapped ${qb.count} line(s).`);
+      return;
+    }
     const type=document.getElementById('importType').value;
     const rows=workbookRows(wb,type);
     importRows(rows,type,e.target,file.name||'uploaded file');
