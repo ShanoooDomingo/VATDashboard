@@ -22,6 +22,7 @@ let activeMasterSub='vatCategories';
 let activeMonth='all';
 let activePurchaseBreakdown=null;
 let workSort={key:'date',dir:'asc'};
+let summarySort={key:'first',dir:'asc'};
 let summaryViewMode='count';
 let activeSummaryStatus='';
 let activeBirReport='slpExcel';
@@ -429,6 +430,48 @@ function filteredTransactions(prefix){const search=(document.getElementById(pref
 function groupKey(t,mode){const supplier=t.supplier||'(For verification)';const voucher=t.voucherName||'(No Voucher Name)';if(mode==='cv')return t.cv||'(No CV Number)';if(mode==='cv_supplier')return `${t.cv||'(No CV Number)'} | ${supplier}`;if(mode==='supplier')return supplier;if(mode==='voucher_supplier')return `${voucher} | ${supplier}`;return voucher}
 function groupSummary(txns,mode){const map=new Map();txns.forEach(t=>{const key=groupKey(t,mode);if(!map.has(key))map.set(key,{key,txns:[]});map.get(key).txns.push(t)});return[...map.values()].map(g=>{g.voucherDisplay=compactList(g.txns.map(t=>t.voucherName),'(No Voucher Name)');g.supplierDisplay=compactList(g.txns.map(t=>t.supplier||'For verification'),'(For verification)');g.tinDisplay=compactList(g.txns.map(t=>t.tin),'--');g.cvDisplay=compactList(g.txns.map(t=>t.cv),'(No CV Number)');g.vatRegDisplay=g.txns.some(t=>Number(t.vat||0)>0)?'VAT-reg':'Non-VAT';return g}).sort((a,b)=>a.key.localeCompare(b.key))}
 function summaryLabels(mode){if(mode==='supplier')return{first:'Registered Supplier',second:'TIN / CVs'};if(mode==='cv')return{first:'CV Number',second:'Registered Supplier'};return{first:'Registered Supplier',second:'TIN / CVs'}}
+// Column types for the Compliance Summary table: text headers sort alphabetically,
+// money/count columns sort numerically, and Status sorts by compliance severity.
+const SUMMARY_SORT_TYPES={first:'text',second:'text',vattype:'text',txn:'num',amount:'num',vat:'num',total:'num',ewt:'num',score:'num',status:'status'};
+function summarySortType(key){return SUMMARY_SORT_TYPES[key]||'text';}
+function summaryFirstLabel(g,mode){return mode==='supplier'?g.supplierDisplay:g.key;}
+function summarySortValue(g,key,mode){
+  switch(key){
+    case 'first':return summaryFirstLabel(g,mode)||'';
+    case 'second':return (mode==='supplier'?g.tinDisplay:g.supplierDisplay)||'';
+    case 'vattype':return g.vatRegDisplay||'';
+    case 'txn':return g.txns.length;
+    case 'amount':return sumTxns(g.txns).amount;
+    case 'vat':return sumTxns(g.txns).vat;
+    case 'total':return sumTxns(g.txns).total;
+    case 'ewt':return sumTxns(g.txns).ewtAmount;
+    case 'score':return groupStatus(g.txns).okPct;
+    case 'status':return statusSortRank(groupStatus(g.txns).status);
+    default:return summaryFirstLabel(g,mode)||'';
+  }
+}
+function sortSummaryGroups(groups,mode){
+  const key=summarySort?.key||'first';
+  const type=summarySortType(key);
+  const dir=summarySort?.dir==='desc'?-1:1;
+  return [...groups].sort((a,b)=>{
+    let cmp=compareTypedValues(summarySortValue(a,key,mode),summarySortValue(b,key,mode),type);
+    // Tie-break on the first (label) column so order stays stable after refresh.
+    if(!cmp&&key!=='first')cmp=naturalCompareText(summaryFirstLabel(a,mode),summaryFirstLabel(b,mode));
+    return cmp*dir;
+  });
+}
+function setSummarySort(key){
+  if(summarySort.key===key)summarySort.dir=summarySort.dir==='asc'?'desc':'asc';
+  else summarySort={key,dir:'asc'};
+  renderSummary();
+}
+function summarySortHeader(key,label,width,cls){
+  const active=summarySort.key===key;
+  const arrow=active?(summarySort.dir==='asc'?'▲':'▼'):'↕';
+  const thCls=['sort-th',cls].filter(Boolean).join(' ');
+  return `<th class="${thCls}"${width?` style="width:${width}"`:''}><button type="button" class="sort-th-btn ${active?'active':''}" onclick="setSummarySort('${attr(key)}')" title="Sort by ${attr(label)}"><span>${esc(label)}</span><span class="sort-arrow">${arrow}</span></button></th>`;
+}
 
 function setSummaryViewMode(mode){
   summaryViewMode=mode==='amount'?'amount':'count';
@@ -457,7 +500,7 @@ function renderSummary(){
   const mode=['supplier','cv'].includes(groupSelect?.value)?groupSelect.value:'supplier';
   if(activeSummaryReview&&activeSummaryReview.mode!==mode)closeSummaryReviewModal(true);
   const tx=filteredTransactions('summary');
-  const groups=groupSummary(tx,mode);
+  const groups=sortSummaryGroups(groupSummary(tx,mode),mode);
   const total=tx.length;
   const okStats=summaryStatusStats(tx,'ok');
   const warnStats=summaryStatusStats(tx,'warn');
@@ -472,10 +515,11 @@ function renderSummary(){
   document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}<div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
   const labels=summaryLabels(mode);
   const supplierFirst=mode==='supplier';
-  const firstHeader=`<th style="width:17%">${labels.first}</th>`;
-  const secondHeader=`<th style="width:17%">${labels.second}</th>`;
-  const vatTypeHeader='<th style="width:10%">VAT Type</th>';
-  document.getElementById('summaryThead').innerHTML=`<tr>${supplierFirst?firstHeader+vatTypeHeader+secondHeader:firstHeader+secondHeader+vatTypeHeader}<th class="num" style="width:5%">Txn</th><th class="num" style="width:11%">Amount</th><th class="num" style="width:9%">VAT</th><th class="num" style="width:10%">Total</th><th class="num" style="width:9%">EWT</th><th style="width:8%">Score</th><th style="width:9%">Status</th></tr>`;
+  const firstHeader=summarySortHeader('first',labels.first,'17%');
+  const secondHeader=summarySortHeader('second',labels.second,'17%');
+  const vatTypeHeader=summarySortHeader('vattype','VAT Type','10%');
+  const numericHeaders=summarySortHeader('txn','Txn','5%','num')+summarySortHeader('amount','Amount','11%','num')+summarySortHeader('vat','VAT','9%','num')+summarySortHeader('total','Total','10%','num')+summarySortHeader('ewt','EWT','9%','num')+summarySortHeader('score','Score','8%')+summarySortHeader('status','Status','9%');
+  document.getElementById('summaryThead').innerHTML=`<tr>${supplierFirst?firstHeader+vatTypeHeader+secondHeader:firstHeader+secondHeader+vatTypeHeader}${numericHeaders}</tr>`;
   const tbody=document.getElementById('summaryTbody'),tfoot=document.getElementById('summaryTfoot');
   tbody.innerHTML='';
   if(!groups.length){tbody.innerHTML='<tr><td colspan="10"><div class="empty-state">No transactions match your filters.</div></td></tr>';tfoot.innerHTML='';closeSummaryReviewModal(true);return}
@@ -682,63 +726,125 @@ function groupReviewReasons(g){
 function groupNeedsReview(g){return groupReviewReasons(g).length>0}
 function reviewTitleFromReasons(reasons){return reasons.length?'BIR export blocker: '+reasons.slice(0,6).join('; ')+(reasons.length>6?'; ...':''):''}
 
+function ymd(year,month,day){
+  // Pack a calendar date into a single comparable YYYYMMDD integer so every
+  // recognised format sorts on the same scale regardless of how it was typed.
+  const y=Number(year)||0,m=Number(month)||1,d=Number(day)||1;
+  return y*10000+m*100+d;
+}
+function fullYear(year){
+  let y=Number(year)||0;
+  if(y>0&&y<100)y+=y<=69?2000:1900; // 2-digit year window: 00-69 -> 2000s, 70-99 -> 1900s
+  return y;
+}
+function excelSerialToYmd(serial){
+  // Excel/Sheets store dates as a serial day count from 1899-12-30 (UTC).
+  const ms=Math.round(serial)*86400000+Date.UTC(1899,11,30);
+  const d=new Date(ms);
+  if(Number.isNaN(d.getTime()))return null;
+  return ymd(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate());
+}
 function parseWorkSortDate(value){
   const raw=String(value??'').trim();
   if(!raw||raw==='--'||raw==='-'||raw.toLowerCase()==='n/a')return Number.POSITIVE_INFINITY;
   const strict=dateSortNumber(raw);
   if(strict!==null)return strict;
-  const numeric=Number(raw);
-  if(Number.isFinite(numeric)&&numeric>20000&&numeric<70000)return numeric;
+  // Bare numeric string => Excel serial date. Convert to a real date first so it
+  // lands on the same YYYYMMDD scale as the text formats below instead of ~45000.
+  if(/^\d+(?:\.\d+)?$/.test(raw)){
+    const numeric=Number(raw);
+    if(Number.isFinite(numeric)&&numeric>20000&&numeric<70000){
+      const fromSerial=excelSerialToYmd(numeric);
+      if(fromSerial!==null)return fromSerial;
+    }
+  }
+  // ISO-ish: YYYY-MM-DD / YYYY/MM/DD (optionally with time)
   let m=raw.match(/^\s*(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?/);
-  if(m)return Number(m[1])*10000+Number(m[2])*100+Number(m[3]||1);
+  if(m)return ymd(m[1],m[2],m[3]||1);
+  // Numeric MM/DD/YYYY or DD/MM/YYYY (2- or 4-digit year). If the first part is
+  // >12 it can only be a day, which disambiguates the two orderings.
   m=raw.match(/^\s*(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/);
   if(m){
     const first=Number(m[1]),second=Number(m[2]);
     const month=first>12?second:first;
     const day=first>12?first:second;
-    let year=m[3]?Number(m[3]):0;
-    if(year&&year<100)year+=2000;
-    return year*10000+month*100+day;
+    return ymd(fullYear(m[3]),month,day);
   }
+  // Month-name formats: "March 5, 2024", "5-Jan-24", "Jan 2024"
   const lower=raw.toLowerCase();
-  let day=Number((raw.match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/i)||[])[1]||1);
-  let year=Number((raw.match(/\b(19\d{2}|20\d{2})\b/)||[])[1]||0);
+  const day=Number((raw.match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/i)||[])[1]||1);
+  const yearToken=(raw.match(/\b(\d{4})\b/)||raw.match(/\b(\d{2})\b(?!.*\b\d{1,2}\b)/)||[])[1];
+  const year=fullYear(yearToken);
   for(let i=0;i<MONTH_NAMES.length;i++){
-    if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`,'i').test(lower)))return year*10000+(i+1)*100+day;
+    if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`,'i').test(lower)))return ymd(year,i+1,day);
   }
+  // Last resort: let the JS engine try, then normalise to the same scale.
   const parsed=new Date(raw);
-  if(!Number.isNaN(parsed.getTime()))return parsed.getFullYear()*10000+(parsed.getMonth()+1)*100+parsed.getDate();
+  if(!Number.isNaN(parsed.getTime()))return ymd(parsed.getFullYear(),parsed.getMonth()+1,parsed.getDate());
   return Number.POSITIVE_INFINITY;
 }
 function naturalCompareText(a,b){return String(a??'').localeCompare(String(b??''),undefined,{numeric:true,sensitivity:'base'})}
-function compareWorkSortValues(a,b,key){
-  if(key==='date')return parseWorkSortDate(a)-parseWorkSortDate(b);
-  return naturalCompareText(a,b);
+// Compliance severity used so Status/Verification columns sort by meaning rather
+// than the raw status keyword: best (Compliant) -> worst (Non-Compliant).
+const STATUS_SORT_PRIORITY={ok:0,warn:1,unreviewed:2,err:3};
+function statusSortRank(status){const r=STATUS_SORT_PRIORITY[status];return r===undefined?99:r;}
+// Generic typed comparator. 'date', 'num' and 'status' arrive pre-normalised to
+// numbers so they sort by real value; everything else falls back to natural text.
+function compareTypedValues(a,b,type){
+  if(type==='text')return naturalCompareText(a,b);
+  const an=Number(a),bn=Number(b);
+  if(!Number.isFinite(an)&&!Number.isFinite(bn))return 0;
+  if(!Number.isFinite(an))return 1; // push unparseable/blank values to the end
+  if(!Number.isFinite(bn))return -1;
+  return an<bn?-1:an>bn?1:0;
 }
+const WORK_SORT_TYPES={date:'date',cv:'text',voucher:'text',vat:'num',ewt:'num',total:'num',balance:'num',verification:'status'};
+function workSortType(key){return WORK_SORT_TYPES[key]||'text';}
 function workSortValueForGroup(g,key){
-  if(key==='date')return Math.min(...(g.txns||[]).map(t=>parseWorkSortDate(t.date)).concat([Number.POSITIVE_INFINITY]));
-  if(key==='voucher')return compactList((g.txns||[]).map(t=>t.voucherName),'');
-  return g.cv||'';
+  switch(key){
+    case 'date':return Math.min(...(g.txns||[]).map(t=>parseWorkSortDate(t.date)).concat([Number.POSITIVE_INFINITY]));
+    case 'voucher':return g.voucherNames||compactList((g.txns||[]).map(t=>t.voucherName),'');
+    case 'vat':return Number(g.bookVat)||0;
+    case 'ewt':return Number(g.bookEwt)||0;
+    case 'total':return Number(g.bookTotal)||0;
+    case 'balance':return (isBalanced(g.vatDiff)&&isBalanced(g.ewtDiff))?0:1;
+    case 'verification':return statusSortRank(g.status&&g.status.status);
+    case 'cv':default:return g.cv||'';
+  }
 }
 function sortWorkingGroups(groups){
   const key=workSort?.key||'date';
+  const type=workSortType(key);
   const dir=workSort?.dir==='desc'?-1:1;
   return [...groups].sort((a,b)=>{
-    let cmp=compareWorkSortValues(workSortValueForGroup(a,key),workSortValueForGroup(b,key),key);
-    if(!cmp&&key!=='date')cmp=compareWorkSortValues(workSortValueForGroup(a,'date'),workSortValueForGroup(b,'date'),'date');
+    let cmp=compareTypedValues(workSortValueForGroup(a,key),workSortValueForGroup(b,key),type);
+    // Stable tie-breakers (date, then CV, then voucher) keep order deterministic
+    // after filtering/search/refresh regardless of the active column.
+    if(!cmp&&key!=='date')cmp=compareTypedValues(workSortValueForGroup(a,'date'),workSortValueForGroup(b,'date'),'date');
     if(!cmp&&key!=='cv')cmp=naturalCompareText(a.cv,b.cv);
     if(!cmp&&key!=='voucher')cmp=naturalCompareText(a.voucherNames,b.voucherNames);
     return cmp*dir;
   });
 }
+function workSortValueForTxn(t,key){
+  switch(key){
+    case 'date':return parseWorkSortDate(t.date);
+    case 'voucher':return t.voucherName||'';
+    case 'vat':return Number(t.vat)||0;
+    case 'ewt':return Number(t.ewtAmount)||0;
+    case 'total':return Number(t.total)||0;
+    case 'verification':return statusSortRank(t.manualStatus);
+    case 'balance':return 0;
+    case 'cv':default:return t.cv||'';
+  }
+}
 function sortWorkingTransactions(txns){
   const key=workSort?.key||'date';
+  const type=workSortType(key);
   const dir=workSort?.dir==='desc'?-1:1;
   return [...(txns||[])].sort((a,b)=>{
-    const av=key==='date'?a.date:key==='voucher'?a.voucherName:a.cv;
-    const bv=key==='date'?b.date:key==='voucher'?b.voucherName:b.cv;
-    let cmp=compareWorkSortValues(av,bv,key);
-    if(!cmp)cmp=compareWorkSortValues(a.date,b.date,'date')||naturalCompareText(a.cv,b.cv)||naturalCompareText(a.voucherName,b.voucherName);
+    let cmp=compareTypedValues(workSortValueForTxn(a,key),workSortValueForTxn(b,key),type);
+    if(!cmp)cmp=compareTypedValues(parseWorkSortDate(a.date),parseWorkSortDate(b.date),'date')||naturalCompareText(a.cv,b.cv)||naturalCompareText(a.voucherName,b.voucherName);
     return cmp*dir;
   });
 }
@@ -812,7 +918,7 @@ function renderWorking(){
   const supplierSpecialCount=allTx.filter(t=>supplierSpecialIssues(t).length).length;
   document.getElementById('reconMetrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${allTx.length} purchase rows</div></div><div class="metric review"><div class="metric-label">Supplier Data Needed</div><div class="metric-value">${forVerification}</div><div class="metric-sub">blank supplier or TIN</div></div><div class="metric money-metric breakdown-tab ${isBalanced(vatDiff)?'ok':'err'} ${activePurchaseBreakdown==='vat'?'active':''}" onclick="setPurchaseBreakdown('vat')" aria-pressed="${activePurchaseBreakdown==='vat'?'true':'false'}"><div class="metric-label">Purchase VAT</div><div class="metric-value">${peso(bookVat)}</div><div class="metric-sub">VAT Category breakdown</div></div><div class="metric money-metric breakdown-tab ${isBalanced(ewtDiff)?'ok':'err'} ${activePurchaseBreakdown==='ewt'?'active':''}" onclick="setPurchaseBreakdown('ewt')" aria-pressed="${activePurchaseBreakdown==='ewt'?'true':'false'}"><div class="metric-label">Purchase EWT</div><div class="metric-value">${peso(bookEwt)}</div><div class="metric-sub">ATC Code breakdown</div></div><div class="metric review"><div class="metric-label">Unreviewed</div><div class="metric-value">${unrev}</div><div class="metric-sub">needs manual tag</div></div><div class="metric ${supplierSpecialCount?'warn':'ok'}"><div class="metric-label">Supplier Detail Review</div><div class="metric-value">${supplierSpecialCount}</div><div class="metric-sub">special character warning(s)</div></div>`;
   renderPurchaseTaxBreakdown(allTx);
-  document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num" style="width:11%">Purchase VAT</th><th class="num" style="width:11%">Purchase EWT</th><th class="num" style="width:12%">Total Amount</th><th style="width:10%"><span class="column-info-wrap">Balance check <button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th style="width:10%"><span class="column-info-wrap">Verification <button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, or Unreviewed. Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
+  document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num sort-th" style="width:11%">${workSortHeader('vat','Purchase VAT')}</th><th class="num sort-th" style="width:11%">${workSortHeader('ewt','Purchase EWT')}</th><th class="num sort-th" style="width:12%">${workSortHeader('total','Total Amount')}</th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('balance','Balance check')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('verification','Verification')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, or Unreviewed. Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
   const tbody=document.getElementById('workTbody'),tfoot=document.getElementById('workTfoot');
   tbody.innerHTML='';
   if(!groups.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state">No CV groups match your filters.</div></td></tr>';tfoot.innerHTML='';focusedCV=null;renderCVReviewModal();return}
