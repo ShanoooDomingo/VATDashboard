@@ -241,16 +241,25 @@
   async function loadAllCentral(){
     cloudApplying=true;
     try{
+      const PAGE=1000; // Supabase caps a single select at 1000 rows, so page through all of them.
       for(const e of ENTITIES){
-        const { data, error } = await supabaseClient.from(e.table)
-          .select('record_id,data,last_modified_by_name,last_modified_at');
-        if(error) throw error;
         const arr=[]; const snap=new Map();
-        (data||[]).forEach(r=>{
-          const rec=e.norm(r.data); rec._id=r.record_id;
-          arr.push(rec); snap.set(r.record_id,stableStringify(rec));
-          lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
-        });
+        let from=0;
+        while(true){
+          const { data, error } = await supabaseClient.from(e.table)
+            .select('record_id,data,last_modified_by_name,last_modified_at')
+            .order('record_id',{ ascending:true })
+            .range(from, from+PAGE-1);
+          if(error) throw error;
+          const batch=data||[];
+          batch.forEach(r=>{
+            const rec=e.norm(r.data); rec._id=r.record_id;
+            arr.push(rec); snap.set(r.record_id,stableStringify(rec));
+            lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
+          });
+          if(batch.length<PAGE) break; // last (or only) page
+          from+=PAGE;
+        }
         e.set(arr); snapshots[e.key]=snap;
       }
       centralLoaded=true; // every entity loaded successfully: deletions may now be trusted
@@ -306,6 +315,14 @@
     const rec=e.norm(payload.new.data); rec._id=id;
     const json=stableStringify(rec);
     if(snapshots[e.key] && snapshots[e.key].get(id)===json) return; // unchanged / own echo
+    // Do not let a slow/out-of-order realtime event revert a newer local edit:
+    // if the record we already hold was modified at/after the incoming event, skip it.
+    const incomingAt=payload.new.last_modified_at;
+    const knownAt=lastModifiedMap[id] && lastModifiedMap[id].at;
+    if(incomingAt && knownAt){
+      const inc=new Date(incomingAt).getTime(), cur=new Date(knownAt).getTime();
+      if(Number.isFinite(inc)&&Number.isFinite(cur)&&inc<cur) return; // stale, would revert newer data
+    }
     const arr=(e.get()||[]).slice();
     const idx=arr.findIndex(r=>r._id===id);
     if(idx>=0) arr[idx]=rec; else arr.push(rec);
@@ -714,9 +731,19 @@
       // 1) Legacy blob table (old decentralized cloud copy). RLS may limit
       //    this to the rows you are allowed to read (usually your own).
       if(legacyTable){
-        const { data, error } = await supabaseClient.from(legacyTable).select('*');
-        if(error){ console.warn('Legacy table read skipped:', error.message); }
-        else if(Array.isArray(data)){
+        // Page through the legacy table too (the single-select 1000-row cap applies here as well).
+        const PAGE=1000; let from=0; let legacyRows=[]; let readError=null;
+        while(true){
+          const { data, error } = await supabaseClient.from(legacyTable).select('*').range(from, from+PAGE-1);
+          if(error){ readError=error; break; }
+          const batch=data||[];
+          legacyRows=legacyRows.concat(batch);
+          if(batch.length<PAGE) break;
+          from+=PAGE;
+        }
+        if(readError){ console.warn('Legacy table read skipped:', readError.message); }
+        else if(Array.isArray(legacyRows)){
+          const data=legacyRows;
           data.sort((a,b)=> new Date(a.updated_at||a.created_at||0) - new Date(b.updated_at||b.created_at||0)); // newest overwrites
           data.forEach(row=>{
             const app = row.app_data || row.data || row.payload || null;
@@ -761,7 +788,17 @@
   }
 
   /* ---------- cloud popover plumbing (unchanged UX) ---------- */
-  function toggleCloudPopover(event){ if(event) event.stopPropagation(); const w=byId('cloudWidget'); if(!w) return; w.classList.toggle('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded',w.classList.contains('open')?'true':'false'); }
+  function positionCloudPopover(){
+    // The popover is position:fixed so it escapes any ancestor stacking context and
+    // always paints on the top UI layer. Anchor it to the trigger on each open.
+    const t=byId('cloudTrigger'), pop=byId('cloudPopover');
+    if(!t||!pop) return;
+    const r=t.getBoundingClientRect();
+    pop.style.top=Math.round(r.bottom+10)+'px';
+    pop.style.right=Math.round(window.innerWidth-r.right)+'px';
+    pop.style.left='auto';
+  }
+  function toggleCloudPopover(event){ if(event) event.stopPropagation(); const w=byId('cloudWidget'); if(!w) return; const opening=!w.classList.contains('open'); w.classList.toggle('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded',opening?'true':'false'); if(opening) positionCloudPopover(); }
   function closeCloudPopover(){ const w=byId('cloudWidget'); if(w) w.classList.remove('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded','false'); }
   function handleLoginKey(event){ if(event.key==='Enter') logIn(); }
   document.addEventListener('click',event=>{ const w=byId('cloudWidget'); if(w&&!w.contains(event.target)) closeCloudPopover(); });

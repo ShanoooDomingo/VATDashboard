@@ -1077,7 +1077,7 @@ function workingDetailTable(g){
     return `<div class="verification-card${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
     <div class="verification-card-head">
       <div><div class="field-label">Description</div><div class="desc-edit-wrap" id="descWrap_${attr(t._id)}"><span class="readonly-desc" id="descView_${attr(t._id)}">${esc(t.description||'--')}</span><button type="button" class="btn btn-small desc-inline-edit-btn" id="descEditBtn_${attr(t._id)}" onclick="editLineDescription('${attr(t._id)}')">Edit</button><span class="desc-edit-form" id="descForm_${attr(t._id)}" style="display:none"><input type="text" class="edit-input desc-edit-input" id="descInput_${attr(t._id)}" value="${attr(t.description)}" placeholder="Description" aria-label="Description"/><button type="button" class="btn btn-small btn-primary" onclick="saveLineDescription('${attr(t._id)}')">Save</button><button type="button" class="btn btn-small" onclick="cancelLineDescription('${attr(t._id)}')">Cancel</button></span></div><div class="line-meta line-meta-grid"><span>Accounting Title: ${esc(t.accountingTitle||'--')}</span><span>Bank Account: ${esc(t.bankAccount||'--')}</span></div></div>
-      <div class="action-buttons verification-actions-right"><span class="autosave-status" id="wp_autosave_${attr(t._id)}">Auto-save</span><button class="btn btn-small btn-danger wp-remove" data-id="${attr(t._id)}">Remove</button></div>
+      <div class="action-buttons verification-actions-right"><button class="btn btn-small btn-danger wp-remove" data-id="${attr(t._id)}">Remove</button></div>
     </div>
     <div class="verification-line">
       <div class="verification-section section-supplier">
@@ -1387,11 +1387,23 @@ function slpDatQuote(value){const s=String(value??'').replace(/[\r\n]/g,' ').tri
 function slpDatNum(value){const n=Number(value||0);return Number.isFinite(n)?n.toFixed(2):'0.00'}
 function slpTin9(value){return normalizeTIN(value).slice(0,9)}
 function slpSupplierNameParts(t){
-  const corp=String(t?.registeredName||t?.supplier||'').trim();
   const last=String(t?.lastName||'').trim();
   const first=String(t?.firstName||'').trim();
   const middle=String(t?.middleName||'').trim();
-  return{corp,last,first,middle,hasName:Boolean(corp||last||first)};
+  // A supplier is an INDIVIDUAL when individual name parts (last/first) exist.
+  // Otherwise it is a corporation/partnership/non-individual identified by its
+  // registered (corporate) name. This decides the DAT taxpayer-type formatting.
+  const isIndividual=Boolean(last||first);
+  const registered=String(t?.registeredName||'').trim();
+  const corp=isIndividual?'':(registered||String(t?.supplier||'').trim());
+  return{
+    corp,
+    last:isIndividual?last:'',
+    first:isIndividual?first:'',
+    middle:isIndividual?middle:'',
+    isIndividual,
+    hasName:Boolean(corp||last||first)
+  };
 }
 function slpRegisteredName(t){
   const parts=slpSupplierNameParts(t);

@@ -935,6 +935,8 @@ table.audit-table td{vertical-align:top}
 .cv-inline-edit-btn,.desc-inline-edit-btn{padding:2px 9px}
 .review-cv-edit{display:inline-flex;align-items:center}
 
-/* ===== Cloud Connection popover: keep above all panels, tables, and modals ===== */
+/* ===== Cloud Connection popover: always on the top layer ===== */
+/* position:fixed escapes the header's flex/stacking context so the popover can
+   never render behind filter boxes, dropdowns, tables, or modals. */
 .cloud-widget{z-index:2200}
-.cloud-popover{z-index:2200;background:#fff}
+.cloud-popover{position:fixed;top:60px;right:16px;z-index:2200;background:#fff}
