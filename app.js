@@ -928,7 +928,7 @@ function renderWorking(){
   const supplierSpecialCount=allTx.filter(t=>supplierSpecialIssues(t).length).length;
   document.getElementById('reconMetrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${allTx.length} purchase rows</div></div><div class="metric review"><div class="metric-label">Supplier Data Needed</div><div class="metric-value">${forVerification}</div><div class="metric-sub">blank supplier or TIN</div></div><div class="metric money-metric breakdown-tab ${isBalanced(vatDiff)?'ok':'err'} ${activePurchaseBreakdown==='vat'?'active':''}" onclick="setPurchaseBreakdown('vat')" aria-pressed="${activePurchaseBreakdown==='vat'?'true':'false'}"><div class="metric-label">Purchase VAT</div><div class="metric-value">${peso(bookVat)}</div><div class="metric-sub">VAT Category breakdown</div></div><div class="metric money-metric breakdown-tab ${isBalanced(ewtDiff)?'ok':'err'} ${activePurchaseBreakdown==='ewt'?'active':''}" onclick="setPurchaseBreakdown('ewt')" aria-pressed="${activePurchaseBreakdown==='ewt'?'true':'false'}"><div class="metric-label">Purchase EWT</div><div class="metric-value">${peso(bookEwt)}</div><div class="metric-sub">ATC Code breakdown</div></div><div class="metric review"><div class="metric-label">Unreviewed</div><div class="metric-value">${unrev}</div><div class="metric-sub">needs manual tag</div></div><div class="metric ${supplierSpecialCount?'warn':'ok'}"><div class="metric-label">Supplier Detail Review</div><div class="metric-value">${supplierSpecialCount}</div><div class="metric-sub">special character warning(s)</div></div>`;
   renderPurchaseTaxBreakdown(allTx);
-  document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num sort-th" style="width:11%">${workSortHeader('vat','Purchase VAT')}</th><th class="num sort-th" style="width:11%">${workSortHeader('ewt','Purchase EWT')}</th><th class="num sort-th" style="width:12%">${workSortHeader('total','Total Amount')}</th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('balance','Balance check')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('verification','Verification')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, or Unreviewed. Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
+  document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num sort-th" style="width:11%">${workSortHeader('vat','Purchase VAT')}</th><th class="num sort-th" style="width:11%">${workSortHeader('ewt','Purchase EWT')}</th><th class="num sort-th" style="width:12%">${workSortHeader('total','Total Amount')}</th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('balance','Balance check')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('verification','Verification')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, Unreviewed, Journal Entry, or Adjusting Entry. <strong>Journal Entry</strong> marks a disbursement intentionally booked as a journal entry: it is valid without invoice, VAT category, ATC code, or TIN, and is not flagged incomplete. <strong>Adjusting Entry</strong> applies the same field exemptions and is additionally excluded from all BIR Compliance Exports (including the Cash Disbursement Book). Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
   const tbody=document.getElementById('workTbody'),tfoot=document.getElementById('workTfoot');
   tbody.innerHTML='';
   if(!groups.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state">No CV groups match your filters.</div></td></tr>';tfoot.innerHTML='';focusedCV=null;renderCVReviewModal();return}
@@ -958,18 +958,103 @@ function renderCVReviewModal(){
   const modal=document.getElementById('cvReviewModal');
   const content=document.getElementById('cvReviewModalContent');
   if(!modal||!content)return;
+  // Preserve the scroll position and focused field so a re-render triggered by
+  // autosave / cloud sync does not jump the popup back to the top (important for
+  // CV groups with many lines).
+  const prevBody=content.querySelector('.cv-review-body');
+  const prevScroll=prevBody?prevBody.scrollTop:0;
+  const activeEl=document.activeElement;
+  let focusId=null,selStart=null,selEnd=null;
+  if(activeEl&&activeEl.id&&content.contains(activeEl)){
+    focusId=activeEl.id;
+    try{selStart=activeEl.selectionStart;selEnd=activeEl.selectionEnd;}catch(err){}
+  }
   if(activeTab!=='working'||!focusedCV){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
   const g=buildCVGroups().find(item=>item.cv===focusedCV);
   if(!g){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
   const cvTotal=g.txns.reduce((a,t)=>a+t.total,0);
   modal.classList.add('visible');
   modal.setAttribute('aria-hidden','false');
-  content.innerHTML=`<div class="detail-inner review-workspace" data-cv="${attr(g.cv)}"><div class="review-workspace-header"><div class="review-workspace-title"><div class="review-title-main" id="cvReviewTitle"><span class="review-cv">${esc(g.cv)}</span><span class="review-voucher">${esc(g.voucherNames)}</span></div><div class="review-chips"><span class="review-chip"><strong>Date</strong> ${esc(g.dateDisplay||'--')}</span><span class="review-chip"><strong>Lines</strong> ${g.txns.length}</span><span class="review-chip"><strong>VAT</strong> ${peso(g.bookVat)}</span><span class="review-chip"><strong>EWT</strong> ${peso(g.bookEwt)}</span><span class="review-chip"><strong>Total</strong> ${peso(cvTotal)}</span></div></div><div class="review-actions"><button type="button" class="cv-review-close" data-close-cv-review aria-label="Close CV verification">×</button></div></div><div class="cv-review-body">${workingDetailTable(g)}</div></div>`;
+  content.innerHTML=`<div class="detail-inner review-workspace" data-cv="${attr(g.cv)}"><div class="review-workspace-header"><div class="review-workspace-title"><div class="review-title-main" id="cvReviewTitle"><span class="review-cv-edit">${cvNumberEditor(g)}</span><span class="review-voucher">${esc(g.voucherNames)}</span></div><div class="review-chips"><span class="review-chip"><strong>Date</strong> ${esc(g.dateDisplay||'--')}</span><span class="review-chip"><strong>Lines</strong> ${g.txns.length}</span><span class="review-chip"><strong>VAT</strong> ${peso(g.bookVat)}</span><span class="review-chip"><strong>EWT</strong> ${peso(g.bookEwt)}</span><span class="review-chip"><strong>Total</strong> ${peso(cvTotal)}</span></div></div><div class="review-actions"><button type="button" class="cv-review-close" data-close-cv-review aria-label="Close CV verification">×</button></div></div><div class="cv-review-body">${workingDetailTable(g)}</div></div>`;
+  // Restore scroll + focus after the rebuild.
+  const newBody=content.querySelector('.cv-review-body');
+  if(newBody)newBody.scrollTop=prevScroll;
+  if(focusId){
+    const el=document.getElementById(focusId);
+    if(el){try{el.focus({preventScroll:true});if(selStart!=null&&typeof el.setSelectionRange==='function')el.setSelectionRange(selStart,selEnd);}catch(err){}}
+  }
 }
 function closeCVReviewModal(){focusedCV=null;openCVs.clear();renderWorking()}
+/* ---- Inline edit: CV Number (group header) and per-line Description ---- */
+function cvNumberEditor(g){
+  const cv=g.cv;
+  return `<span class="cv-edit-wrap" id="cvEditWrap">`
+    +`<span class="review-cv" id="cvView">${esc(cv)}</span>`
+    +`<button type="button" class="btn btn-small cv-inline-edit-btn" id="cvEditBtn" onclick="editCvNumber()">Edit</button>`
+    +`<span class="cv-edit-form" id="cvEditForm" style="display:none">`
+    +`<input type="text" class="edit-input cv-edit-input" id="cvEditInput" value="${attr(cv)}" aria-label="CV Number"/>`
+    +`<button type="button" class="btn btn-small btn-primary" onclick="saveCvNumber()">Save</button>`
+    +`<button type="button" class="btn btn-small" onclick="cancelCvNumber()">Cancel</button>`
+    +`</span></span>`;
+}
+function editCvNumber(){
+  const view=document.getElementById('cvView'),btn=document.getElementById('cvEditBtn'),form=document.getElementById('cvEditForm');
+  if(!form)return;
+  view.style.display='none';if(btn)btn.style.display='none';form.style.display='';
+  const inp=document.getElementById('cvEditInput');if(inp){inp.focus();inp.select();}
+}
+function cancelCvNumber(){
+  const view=document.getElementById('cvView'),btn=document.getElementById('cvEditBtn'),form=document.getElementById('cvEditForm');
+  if(!form)return;
+  const inp=document.getElementById('cvEditInput');if(inp)inp.value=focusedCV;
+  form.style.display='none';view.style.display='';if(btn)btn.style.display='';
+}
+function saveCvNumber(){
+  const inp=document.getElementById('cvEditInput');if(!inp)return;
+  const newCv=String(inp.value||'').trim();
+  const oldKey=focusedCV;
+  if(!newCv){showToast('CV Number cannot be blank.');return;}
+  if(newCv===oldKey){cancelCvNumber();return;}
+  let changed=0;
+  transactions.forEach(t=>{if((t.cv||'(No CV Number)')===oldKey){t.cv=newCv;changed++;}});
+  // Keep the matching VAT/EWT balance rows attached to the renamed CV.
+  (Array.isArray(vatLedger)?vatLedger:[]).forEach(r=>{if((r.cv||'(No CV Number)')===oldKey)r.cv=newCv;});
+  (Array.isArray(ewtLedger)?ewtLedger:[]).forEach(r=>{if((r.cv||'(No CV Number)')===oldKey)r.cv=newCv;});
+  if(!changed){showToast('No transactions found for this CV.');return;}
+  focusedCV=newCv;openCVs.clear();openCVs.add(newCv);
+  saveAll();renderAll();
+  showToast('CV Number updated.');
+}
+function editLineDescription(id){
+  const view=document.getElementById('descView_'+id),btn=document.getElementById('descEditBtn_'+id),form=document.getElementById('descForm_'+id);
+  if(!form)return;
+  view.style.display='none';if(btn)btn.style.display='none';form.style.display='';
+  const inp=document.getElementById('descInput_'+id);if(inp){inp.focus();inp.select();}
+}
+function cancelLineDescription(id){
+  const t=transactions.find(x=>x._id===id);
+  const view=document.getElementById('descView_'+id),btn=document.getElementById('descEditBtn_'+id),form=document.getElementById('descForm_'+id);
+  if(!form)return;
+  const inp=document.getElementById('descInput_'+id);if(inp&&t)inp.value=t.description||'';
+  form.style.display='none';view.style.display='';if(btn)btn.style.display='';
+}
+function saveLineDescription(id){
+  const inp=document.getElementById('descInput_'+id);if(!inp)return;
+  const idx=transactions.findIndex(x=>x._id===id);if(idx<0)return;
+  const val=String(inp.value||'').trim();
+  transactions[idx]={...transactions[idx],description:val,lastReviewed:new Date().toISOString()};
+  const view=document.getElementById('descView_'+id);if(view)view.textContent=val||'--';
+  cancelLineDescription(id);
+  saveAll();
+  showToast('Description updated.');
+}
 function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(['ok','warn','err','journal','adjusting'].includes(s)?s:'unreviewed')}
-function applyVerificationStatusClass(el){if(!el)return;el.classList.remove('status-ok','status-warn','status-err','status-unreviewed');el.classList.add(verificationStatusClass(el.value))}
-function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant'],['journal','Journal Entry'],['adjusting','Adjusting Entry']];const cls=verificationStatusClass(t.manualStatus);return `<select class="select-small wp-status wp-autosave verification-status-select ${cls}" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
+// The dropdown stays on the neutral body/bone background; the colored status card
+// next to it is what reflects the verification status colour. This keeps applying
+// the live colour to the card whenever the dropdown value changes.
+function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const card=document.getElementById('wp_statuscard_'+id);if(!card)return;const s=parseVerification(el.value);card.className='verification-status-card '+verificationStatusClass(s);card.textContent=verificationText(s);}
+function verificationStatusCard(t){const s=parseVerification(t.manualStatus);return `<span class="verification-status-card ${verificationStatusClass(s)}" id="wp_statuscard_${attr(t._id)}">${esc(verificationText(s))}</span>`}
+function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant'],['journal','Journal Entry'],['adjusting','Adjusting Entry']];return `<select class="select-small wp-status wp-autosave verification-status-select" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
 function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.address);if(t.city)parts.push(t.city);if(t.zip)parts.push(t.zip);return parts.length?parts.join(', '):'--'}
 function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !/^[A-Za-z0-9 .,&()'\/-]*$/.test(v)}
 function supplierSpecialIssues(obj){const checks=[['supplier','Registered Name'],['registeredName','Registered Name'],['lastName','Registered Last Name'],['firstName','Registered First Name'],['middleName','Registered Middle Name'],['address','Registered Address'],['city','City'],['zip','ZIP Code']];const seen=new Set();const issues=[];checks.forEach(([key,label])=>{if(seen.has(label))return;const val=obj?.[key];if(supplierFieldHasSpecial(val)){seen.add(label);issues.push(label)}});return issues}
@@ -993,7 +1078,7 @@ function workingDetailTable(g){
     const reviewTitle=reviewTitleFromReasons(reviewReasons);
     return `<div class="verification-card${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
     <div class="verification-card-head">
-      <div><div class="field-label">Description</div><div class="readonly-desc">${esc(t.description||'--')}</div><div class="line-meta line-meta-grid"><span>Accounting Title: ${esc(t.accountingTitle||'--')}</span><span>Bank Account: ${esc(t.bankAccount||'--')}</span></div></div>
+      <div><div class="field-label">Description</div><div class="desc-edit-wrap" id="descWrap_${attr(t._id)}"><span class="readonly-desc" id="descView_${attr(t._id)}">${esc(t.description||'--')}</span><button type="button" class="btn btn-small desc-inline-edit-btn" id="descEditBtn_${attr(t._id)}" onclick="editLineDescription('${attr(t._id)}')">Edit</button><span class="desc-edit-form" id="descForm_${attr(t._id)}" style="display:none"><input type="text" class="edit-input desc-edit-input" id="descInput_${attr(t._id)}" value="${attr(t.description)}" placeholder="Description" aria-label="Description"/><button type="button" class="btn btn-small btn-primary" onclick="saveLineDescription('${attr(t._id)}')">Save</button><button type="button" class="btn btn-small" onclick="cancelLineDescription('${attr(t._id)}')">Cancel</button></span></div><div class="line-meta line-meta-grid"><span>Accounting Title: ${esc(t.accountingTitle||'--')}</span><span>Bank Account: ${esc(t.bankAccount||'--')}</span></div></div>
       <div class="action-buttons verification-actions-right"><span class="autosave-status" id="wp_autosave_${attr(t._id)}">Auto-save</span><button class="btn btn-small btn-danger wp-remove" data-id="${attr(t._id)}">Remove</button></div>
     </div>
     <div class="verification-line">
@@ -1028,7 +1113,7 @@ function workingDetailTable(g){
       <div class="verification-section section-verification">
         <div class="verification-section-title">Verification</div>
         <div class="compact-grid">
-          <div class="compact-field"><label>Status</label>${verificationSelect(t)}</div>
+          <div class="compact-field"><label>Status</label><div class="status-edit-row">${verificationStatusCard(t)}${verificationSelect(t)}</div></div>
           <div class="compact-field compact-note"><label>Notes</label><input class="note-input wp-autosave" data-id="${attr(t._id)}" id="wp_note_${attr(t._id)}" value="${attr(t.reviewNote)}" placeholder="Verification note"/></div>
         </div>
       </div>
