@@ -1049,11 +1049,9 @@ function saveLineDescription(id){
   showToast('Description updated.');
 }
 function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(['ok','warn','err','journal','adjusting'].includes(s)?s:'unreviewed')}
-// The dropdown stays on the neutral body/bone background; the colored status card
-// next to it is what reflects the verification status colour. This keeps applying
-// the live colour to the card whenever the dropdown value changes.
-function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const card=document.getElementById('wp_statuscard_'+id);if(!card)return;const s=parseVerification(el.value);card.className='verification-status-card '+verificationStatusClass(s);card.textContent=verificationText(s);}
-function verificationStatusCard(t){const s=parseVerification(t.manualStatus);return `<span class="verification-status-card ${verificationStatusClass(s)}" id="wp_statuscard_${attr(t._id)}">${esc(verificationText(s))}</span>`}
+// Recolor the whole Verification Status box/card to match the selected status.
+// The dropdown itself stays neutral/readable; no separate badge is used.
+function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const box=document.getElementById('wp_vsection_'+id);if(!box)return;const s=parseVerification(el.value);box.classList.remove('status-ok','status-warn','status-err','status-unreviewed','status-journal','status-adjusting');box.classList.add(verificationStatusClass(s));}
 function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant'],['journal','Journal Entry'],['adjusting','Adjusting Entry']];return `<select class="select-small wp-status wp-autosave verification-status-select" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
 function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.address);if(t.city)parts.push(t.city);if(t.zip)parts.push(t.zip);return parts.length?parts.join(', '):'--'}
 function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !/^[A-Za-z0-9 .,&()'\/-]*$/.test(v)}
@@ -1110,10 +1108,10 @@ function workingDetailTable(g){
           <div class="compact-field"><label>Computed EWT</label><input class="${(ewtInputClass+(ewtRateMismatch(t)?' ledger-alert-input':''))}" id="wp_ewt_${attr(t._id)}" value="${attr(money(t.ewtAmount))}" readonly/></div>
         </div>
       </div>
-      <div class="verification-section section-verification">
+      <div class="verification-section section-verification ${verificationStatusClass(t.manualStatus)}" id="wp_vsection_${attr(t._id)}">
         <div class="verification-section-title">Verification</div>
         <div class="compact-grid">
-          <div class="compact-field"><label>Status</label><div class="status-edit-row">${verificationStatusCard(t)}${verificationSelect(t)}</div></div>
+          <div class="compact-field"><label>Status</label>${verificationSelect(t)}</div>
           <div class="compact-field compact-note"><label>Notes</label><input class="note-input wp-autosave" data-id="${attr(t._id)}" id="wp_note_${attr(t._id)}" value="${attr(t.reviewNote)}" placeholder="Verification note"/></div>
         </div>
       </div>

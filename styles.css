@@ -914,19 +914,27 @@ table.audit-table td{vertical-align:top}
 .summary-review-modal .summary-status-pill.status-journal{background:#dbeafe;color:#1e3a8a;border-color:#2563eb}
 .summary-review-modal .summary-status-pill.status-adjusting{background:#fce7f3;color:#9d174d;border-color:#db2777}
 
-/* ===== Inline edit (CV Number, Description) + verification status card ===== */
+/* ===== Inline edit (CV Number, Description) ===== */
+/* The dropdown stays neutral/readable; the whole Verification box is colour-coded. */
 .verification-status-select{background:var(--surface);color:var(--text);border-color:var(--border);box-shadow:none}
-.status-edit-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.verification-status-card{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800;border:1px solid transparent;white-space:nowrap}
-.verification-status-card.status-ok{background:#dcfce7;color:#14532d;border-color:#22c55e}
-.verification-status-card.status-warn{background:#fef3c7;color:#713f12;border-color:#f59e0b}
-.verification-status-card.status-err{background:#fee2e2;color:#7f1d1d;border-color:#ef4444}
-.verification-status-card.status-unreviewed{background:#f1f5f9;color:#334155;border-color:#94a3b8}
-.verification-status-card.status-journal{background:#dbeafe;color:#1e3a8a;border-color:#2563eb}
-.verification-status-card.status-adjusting{background:#fce7f3;color:#9d174d;border-color:#db2777}
+.section-verification.status-ok{background:#f0fdf4!important;border-color:#22c55e!important}
+.section-verification.status-warn{background:#fffbeb!important;border-color:#f59e0b!important}
+.section-verification.status-err{background:#fef2f2!important;border-color:#ef4444!important}
+.section-verification.status-unreviewed{background:#f8fafc!important;border-color:#cbd5e1!important}
+.section-verification.status-journal{background:#eff6ff!important;border-color:#2563eb!important}
+.section-verification.status-adjusting{background:#fdf2f8!important;border-color:#db2777!important}
+.section-verification.status-ok .verification-section-title{color:#15803d}
+.section-verification.status-warn .verification-section-title{color:#b45309}
+.section-verification.status-err .verification-section-title{color:#b91c1c}
+.section-verification.status-journal .verification-section-title{color:#1d4ed8}
+.section-verification.status-adjusting .verification-section-title{color:#be185d}
 .cv-edit-wrap,.desc-edit-wrap{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cv-edit-form,.desc-edit-form{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
 .cv-edit-input{min-width:150px}
 .desc-edit-input{min-width:240px;max-width:100%}
 .cv-inline-edit-btn,.desc-inline-edit-btn{padding:2px 9px}
 .review-cv-edit{display:inline-flex;align-items:center}
+
+/* ===== Cloud Connection popover: keep above all panels, tables, and modals ===== */
+.cloud-widget{z-index:2200}
+.cloud-popover{z-index:2200;background:#fff}

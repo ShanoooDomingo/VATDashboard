@@ -47,6 +47,7 @@
   let initPromise = null;   // resolves when initSupabase() finishes (success or handled failure)
 
   let cloudApplying = false;   // true while applying remote data (suppress push)
+  let centralLoaded = false;   // true only after a full successful load of the shared dataset
   let cloudBusy = false;       // true while a sync write is in flight
   let rerunQueued = false;
   let syncTimer = null;
@@ -130,8 +131,25 @@
           changes.push({ e, op:'upsert', id, rec, json, action, oldRec, newRec:rec });
         }
       }
+      // Records present in the known cloud snapshot but missing from the local
+      // array are candidate deletions. We only honour these as real deletions when
+      // it is safe to do so (see guard below) — otherwise an incomplete or
+      // momentarily-truncated local array could wipe unrelated cloud records.
+      const candidateDeletes=[];
       for(const [id,prev] of snap){
-        if(!seen.has(id)) changes.push({ e, op:'delete', id, action:'Delete', oldRec:safeParse(prev), newRec:null });
+        if(!seen.has(id)) candidateDeletes.push({ id, prev });
+      }
+      if(candidateDeletes.length){
+        const explicitBulk=!!ctx.action; // e.g. an Upload/replace import is an intentional bulk op
+        // Suspicious when we'd remove more rows than remain locally (and more than a
+        // small threshold): that signals a partial/failed load, not a user deletion.
+        const looksTruncated=!explicitBulk && (cur.length===0 || candidateDeletes.length > Math.max(5, cur.length));
+        if(!centralLoaded || looksTruncated){
+          console.warn('[sync] Skipping '+candidateDeletes.length+' inferred deletion(s) for "'+e.key+'" to protect cloud data ('
+            +(!centralLoaded?'central data not fully loaded yet':'local dataset looks incomplete')+').');
+        }else{
+          candidateDeletes.forEach(d=>changes.push({ e, op:'delete', id:d.id, action:'Delete', oldRec:safeParse(d.prev), newRec:null }));
+        }
       }
     }
     return { changes, noops };
@@ -235,8 +253,13 @@
         });
         e.set(arr); snapshots[e.key]=snap;
       }
+      centralLoaded=true; // every entity loaded successfully: deletions may now be trusted
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
       rerender();
+    }catch(err){
+      // A failed/partial load must not leave us trusting an incomplete local array.
+      centralLoaded=false;
+      throw err;
     }finally{ cloudApplying=false; }
   }
 
@@ -660,7 +683,7 @@
       clearTimeout(syncTimer);
       unsubscribeRealtime();
       if(supabaseClient) await supabaseClient.auth.signOut();
-      cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false;
+      cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false; centralLoaded=false;
       const p=byId('authPassword'); if(p) p.value='';
       syncAuditTabVisibility();
       closeCloudPopover(); setAuthView(false);
