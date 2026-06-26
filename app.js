@@ -19,6 +19,7 @@ const demoSupplierMaster=[
 ];
 let activeTab='summary';
 let activeMasterSub='vatCategories';
+let activeYear='all';
 let activeMonth='all';
 let activePurchaseBreakdown=null;
 let workSort={key:'date',dir:'asc'};
@@ -169,14 +170,49 @@ let ewtLedger=loadArray(EWT_LEDGER_KEY,demoEwtLedger).map(r=>normalizeLedger(r,'
 function monthInfo(month,year){const m=Math.max(1,Math.min(12,Number(month)||1));const mm=String(m).padStart(2,'0');const yr=String(year||'').trim();return{key:yr?`${yr}-${mm}`:`m${mm}`,label:`${MONTH_NAMES[m-1][0]}${yr?' '+yr:''}`,order:yr?Number(yr)*100+m:m}}
 function monthInfoFromDate(value){const raw=String(value??'').trim();if(!raw||raw==='--'||raw==='-'||raw.toLowerCase()==='n/a')return{key:'undated',label:'Undated',order:999999};let m=raw.match(/^\s*(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?/);if(m)return monthInfo(Number(m[2]),m[1]);m=raw.match(/^\s*(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/);if(m){const first=Number(m[1]),second=Number(m[2]);const month=first>12?second:first;let yr=m[3]||'';if(yr&&yr.length===2)yr='20'+yr;return monthInfo(month,yr)}const lower=raw.toLowerCase();const y=(raw.match(/\b(19\d{2}|20\d{2})\b/)||[])[1]||'';for(let i=0;i<MONTH_NAMES.length;i++){if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`).test(lower)))return monthInfo(i+1,y)}const parsed=new Date(raw);if(!Number.isNaN(parsed.getTime()))return monthInfo(parsed.getMonth()+1,String(parsed.getFullYear()));return{key:'undated',label:'Undated',order:999999}}
 function recordMonthKey(row){return monthInfoFromDate(row?.date).key}
-function recordMatchesActiveMonth(row){return activeMonth==='all'||recordMonthKey(row)===activeMonth}
+function yearOfKey(key){return /^(\d{4})-\d{2}$/.test(String(key))?String(key).slice(0,4):''}
+// Scope = selected month (a specific YYYY-MM) OR, when no single month is picked,
+// the whole selected fiscal year OR all years. Years never mix unless "All Years".
+function recordMatchesActiveMonth(row){
+  const key=recordMonthKey(row);
+  if(activeMonth!=='all')return key===activeMonth;
+  if(activeYear!=='all')return yearOfKey(key)===activeYear;
+  return true;
+}
 function visibleTransactionsForMonth(){return transactions.map(normalizeTransaction).filter(recordMatchesActiveMonth)}
 function visibleVatLedgerForMonth(){return vatLedger.map(r=>normalizeLedger(r,'vat')).filter(recordMatchesActiveMonth)}
 function visibleEwtLedgerForMonth(){return ewtLedger.map(r=>normalizeLedger(r,'ewt')).filter(recordMatchesActiveMonth)}
 function buildMonthBuckets(){const map=new Map();const add=row=>{const info=monthInfoFromDate(row?.date);if(!map.has(info.key))map.set(info.key,info)};transactions.forEach(add);vatLedger.forEach(add);ewtLedger.forEach(add);return[...map.values()].sort((a,b)=>a.order-b.order||a.label.localeCompare(b.label))}
 function monthCount(key){if(key==='all')return transactions.length;return transactions.filter(t=>recordMonthKey(t)===key).length}
-function setMonth(key){activeMonth=key;focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel').classList.remove('visible');document.getElementById('addPanel').classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
-function renderMonthTabs(){const el=document.getElementById('monthTabs');if(!el)return;if(activeTab==='masters'){el.innerHTML='';el.style.display='none';return}el.style.display='flex';const months=buildMonthBuckets();const keys=new Set(['all',...months.map(m=>m.key)]);if(!keys.has(activeMonth))activeMonth='all';let html=`<button class="month-btn ${activeMonth==='all'?'active':''}" onclick="setMonth('all')">All Months <span>${transactions.length} txns</span></button>`;months.forEach(m=>{html+=`<button class="month-btn ${activeMonth===m.key?'active':''}" onclick="setMonth('${attr(m.key)}')">${esc(m.label)} <span>${monthCount(m.key)} txns</span></button>`});el.innerHTML=html}
+function yearCount(year){if(year==='all')return transactions.length;return transactions.filter(t=>yearOfKey(recordMonthKey(t))===year).length}
+// Distinct fiscal years present in the data (plus an "undated" bucket if needed).
+function buildYearBuckets(){
+  const map=new Map();
+  buildMonthBuckets().forEach(m=>{const yr=yearOfKey(m.key)||'undated';if(!map.has(yr))map.set(yr,{year:yr,order:yr==='undated'?999999:Number(yr)})});
+  return [...map.values()].sort((a,b)=>a.order-b.order);
+}
+function monthsForActiveYear(){const months=buildMonthBuckets();return activeYear==='all'?months:months.filter(m=>(yearOfKey(m.key)||'undated')===activeYear)}
+function setYear(year){activeYear=year;activeMonth='all';focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel')?.classList.remove('visible');document.getElementById('addPanel')?.classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
+function setMonth(key){if(key!=='all'){const ym=yearOfKey(key);if(ym)activeYear=ym}activeMonth=key;focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel')?.classList.remove('visible');document.getElementById('addPanel')?.classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
+function renderMonthTabs(){
+  const el=document.getElementById('monthTabs');if(!el)return;
+  if(activeTab==='masters'){el.innerHTML='';el.style.display='none';return}
+  el.style.display='flex';
+  const years=buildYearBuckets();
+  if(!new Set(['all',...years.map(y=>y.year)]).has(activeYear))activeYear='all';
+  // Keep the selected month consistent with the selected year.
+  if(activeMonth!=='all'){const ym=yearOfKey(activeMonth);if(ym&&activeYear!=='all'&&ym!==activeYear)activeMonth='all'}
+  if(activeMonth==='all'&&!new Set(['all',...buildMonthBuckets().map(m=>m.key)]).has(activeMonth)){/* all is always valid */}
+  // Row 1: fiscal years
+  let yearHtml=`<button class="year-btn ${activeYear==='all'?'active':''}" onclick="setYear('all')">All Years <span>${transactions.length}</span></button>`;
+  years.forEach(y=>{yearHtml+=`<button class="year-btn ${activeYear===y.year?'active':''}" onclick="setYear('${attr(y.year)}')">${esc(y.year==='undated'?'Undated':y.year)} <span>${yearCount(y.year)}</span></button>`});
+  // Row 2: months within the selected year (or all months across years)
+  const months=monthsForActiveYear();
+  const firstLabel=activeYear==='all'?`All Months <span>${transactions.length} txns</span>`:`Full Year ${esc(activeYear==='undated'?'Undated':activeYear)} <span>${yearCount(activeYear)} txns</span>`;
+  let monthHtml=`<button class="month-btn ${activeMonth==='all'?'active':''}" onclick="setMonth('all')">${firstLabel}</button>`;
+  months.forEach(m=>{monthHtml+=`<button class="month-btn ${activeMonth===m.key?'active':''}" onclick="setMonth('${attr(m.key)}')">${esc(m.label)} <span>${monthCount(m.key)} txns</span></button>`});
+  el.innerHTML=`<div class="year-row">${yearHtml}</div><div class="month-row">${monthHtml}</div>`;
+}
 function badge(type,label){return `<span class="badge badge-${type}">${esc(label)}</span>`}
 function vatBadge(type){return type==='VAT-reg'?badge('ok','VAT Registered'):badge('na','Not VAT Registered')}
 function statusBadge(status){if(status==='ok')return badge('ok','Compliant');if(status==='warn')return badge('warn','Without Invoice');if(status==='err')return badge('err','Non-Compliant');if(status==='journal')return badge('journal','Journal Entry');if(status==='adjusting')return badge('adjusting','Adjusting Entry');return badge('review','Unreviewed')}
@@ -192,7 +228,7 @@ function switchMasterSub(sub){activeMasterSub=sub;['vatCategories','atcRates','s
 function updateActionButtons(){const canImport=['working','vat','ewt','masters'].includes(activeTab);document.getElementById('importBtn').style.display=canImport?'inline-flex':'none';document.getElementById('addBtn').style.display=activeTab==='working'?'inline-flex':'none';let label='Export Summary';if(activeTab==='working')label='Export Purchases';else if(activeTab==='vat')label='Export VAT Balances';else if(activeTab==='ewt')label='Export EWT Balances';else if(activeTab==='bir')label='Export BIR Index';else if(activeTab==='masters')label=activeMasterSub==='vatCategories'?'Export VAT Categories':activeMasterSub==='atcRates'?'Export ATC Master':'Export Supplier Master';document.getElementById('exportBtn').textContent=label}
 function toggleImport(){if(activeTab==='summary')switchTab('working');document.getElementById('importPanel').classList.toggle('visible');document.getElementById('addPanel').classList.remove('visible');let type='book';if(activeTab==='vat')type='vatLedger';else if(activeTab==='ewt')type='ewtLedger';else if(activeTab==='masters')type=activeMasterSub==='vatCategories'?'vatCategoryMaster':activeMasterSub==='atcRates'?'atcMaster':'supplierMaster';document.getElementById('importType').value=type;updateImportHelp()}
 function toggleAdd(){if(activeTab!=='working')switchTab('working');document.getElementById('addPanel').classList.toggle('visible');document.getElementById('importPanel').classList.remove('visible')}
-function activeMonthLabel(){if(activeMonth==='all')return 'All Months';const found=buildMonthBuckets().find(m=>m.key===activeMonth);return found?found.label:activeMonth}
+function activeMonthLabel(){if(activeMonth==='all')return activeYear==='all'?'All Months':`Full Year ${activeYear==='undated'?'Undated':activeYear}`;const found=buildMonthBuckets().find(m=>m.key===activeMonth);return found?found.label:activeMonth}
 function clearLedgerUpload(type){
   const isVat=type==='vat';
   const label=isVat?'VAT Balances':'EWT Balances';
@@ -1162,7 +1198,22 @@ function verificationStatusClass(status){const s=parseVerification(status);retur
 function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const box=document.getElementById('wp_vsection_'+id);if(!box)return;const s=parseVerification(el.value);box.classList.remove('status-ok','status-warn','status-err','status-unreviewed','status-journal','status-adjusting');box.classList.add(verificationStatusClass(s));}
 function verificationSelect(t){const opts=[['unreviewed','Unreviewed'],['ok','Compliant'],['warn','Without Invoice'],['err','Non-Compliant'],['journal','Journal Entry'],['adjusting','Adjusting Entry']];return `<select class="select-small wp-status wp-autosave verification-status-select" data-id="${attr(t._id)}" id="wp_status_${attr(t._id)}" aria-label="Verification Status">${opts.map(([v,l])=>`<option value="${v}" ${t.manualStatus===v?'selected':''}>${l}</option>`).join('')}</select>`}
 function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.address);if(t.city)parts.push(t.city);if(t.zip)parts.push(t.zip);return parts.length?parts.join(', '):'--'}
-function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !/^[A-Za-z0-9 .,&()'\/-]*$/.test(v)}
+// Characters the BIR DAT/Reliefs format accepts: A-Z, 0-9, space and . , & ( ) ' / -
+const BIR_ALLOWED_RE=/^[A-Za-z0-9 .,&()'\/-]*$/;
+function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !BIR_ALLOWED_RE.test(v)}
+// Make any text safe for BIR export: transliterate accents (ñ->N, é->E…), drop
+// unsupported characters, collapse spaces. Preserves as much of the original as possible.
+function birSanitize(value){
+  let s=String(value??'').normalize('NFKD').replace(/[̀-ͯ]/g,''); // strip diacritics
+  s=s.replace(/[“”]/g,'"').replace(/[‘’]/g,"'").replace(/[–—]/g,'-'); // smart punctuation -> ascii
+  s=s.replace(/[^A-Za-z0-9 .,&()'\/-]/g,' ');                          // drop anything still unsupported
+  return s.replace(/\s+/g,' ').trim();
+}
+// Per-field special-character check for the Supplier Master entry form.
+function supplierSpecialFieldKeys(row){
+  const checks=[['registeredName','Registered Name','mc_sup_registered'],['lastName','Last Name','mc_sup_last'],['firstName','First Name','mc_sup_first'],['middleName','Middle Name','mc_sup_middle'],['address','Registered Address','mc_sup_address'],['city','City','mc_sup_city'],['zip','ZIP Code','mc_sup_zip']];
+  return checks.filter(([key])=>supplierFieldHasSpecial(row?.[key])).map(([key,label,inputId])=>({key,label,inputId}));
+}
 function supplierSpecialIssues(obj){const checks=[['supplier','Registered Name'],['registeredName','Registered Name'],['lastName','Registered Last Name'],['firstName','Registered First Name'],['middleName','Registered Middle Name'],['address','Registered Address'],['city','City'],['zip','ZIP Code']];const seen=new Set();const issues=[];checks.forEach(([key,label])=>{if(seen.has(label))return;const val=obj?.[key];if(supplierFieldHasSpecial(val)){seen.add(label);issues.push(label)}});return issues}
 function specialFieldClass(value){return supplierFieldHasSpecial(value)?' special-review-field':''}
 function supplierSpecialWarningHtml(t){const issues=supplierSpecialIssues(t);const manual=!!t.supplierManualOverride;if(!issues.length&&!manual)return '';const label=issues.length?`Special character review: ${issues.join(', ')}`:'Manual supplier override active';return `<div class="supplier-special-alert"><span><strong>${esc(label)}</strong><br/>TIN is excluded from this check. Review and correct supplier details before BIR exports if needed.</span><button type="button" class="btn" onclick="enableSupplierManualIntervention('${attr(t._id)}')">Manual intervention</button></div>`}
@@ -1314,7 +1365,24 @@ function dedupeVatCategories(){const map=new Map();VAT_CATEGORIES.map(normalizeV
 function dedupeAtcMaster(){const map=new Map();atcMaster.map(normalizeAtcMaster).filter(a=>normalizeATC(a.atcCode)).forEach(a=>map.set(normalizeATC(a.atcCode),a));atcMaster=[...map.values()].sort((a,b)=>atcText(a.atcCode).localeCompare(atcText(b.atcCode)))}
 function addVatCategoryManual(){const code=normalizeVatCodeRaw(getValue('mc_vat_code'));if(!code){showToast('Enter a valid VAT Category code.');return}const label=getValue('mc_vat_label');if(!label){showToast('Enter the VAT Category description.');return}const rate=getValue('mc_vat_rate');const row=normalizeVatCategoryMaster({code,label,kind:getValue('mc_vat_kind'),rate});VAT_CATEGORIES=VAT_CATEGORIES.filter(c=>c.code!==row.code).concat(row);dedupeVatCategories();saveAll();renderAll();['mc_vat_code','mc_vat_label','mc_vat_rate'].forEach(id=>setValue(id,''));showToast('VAT Category saved.')}
 function addAtcMasterManual(){const atcCode=normalizeATC(getValue('mc_atc_code'));if(!atcCode){showToast('ATC Code must use the format WC 160 or WI 160.');return}const rate=parseRate(getValue('mc_atc_rate'));if(rate===null){showToast('Enter the EWT rate percentage.');return}const row=normalizeAtcMaster({atcCode,rate,description:getValue('mc_atc_desc'),source:getValue('mc_atc_source')});atcMaster=atcMaster.filter(a=>normalizeATC(a.atcCode)!==row.atcCode).concat(row);dedupeAtcMaster();transactions=transactions.map(normalizeTransaction);saveAll();renderAll();['mc_atc_code','mc_atc_rate','mc_atc_desc','mc_atc_source'].forEach(id=>setValue(id,''));showToast('ATC Code saved.')}
-function addSupplierMasterManual(){const tin=getValue('mc_sup_tin');if(!normalizeTIN(tin)){showToast('Enter the supplier TIN.');return}const row=normalizeSupplier({tin,registeredName:getValue('mc_sup_registered'),lastName:getValue('mc_sup_last'),firstName:getValue('mc_sup_first'),middleName:getValue('mc_sup_middle'),address:getValue('mc_sup_address'),city:getValue('mc_sup_city'),zip:getValue('mc_sup_zip')});supplierMaster=supplierMaster.filter(s=>normalizeTIN(s.tin)!==normalizeTIN(row.tin)).concat(row);dedupeSupplierMaster();saveAll();renderAll();['mc_sup_tin','mc_sup_registered','mc_sup_last','mc_sup_first','mc_sup_middle','mc_sup_address','mc_sup_city','mc_sup_zip'].forEach(id=>setValue(id,''));showToast('Supplier Master record saved.')} 
+function clearSupplierFieldErrors(){['mc_sup_registered','mc_sup_last','mc_sup_first','mc_sup_middle','mc_sup_address','mc_sup_city','mc_sup_zip'].forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('field-invalid')});const box=document.getElementById('mc_sup_validation');if(box){box.style.display='none';box.innerHTML=''}}
+function addSupplierMasterManual(){
+  clearSupplierFieldErrors();
+  const tin=getValue('mc_sup_tin');if(!normalizeTIN(tin)){showToast('Enter the supplier TIN.');return}
+  const row=normalizeSupplier({tin,registeredName:getValue('mc_sup_registered'),lastName:getValue('mc_sup_last'),firstName:getValue('mc_sup_first'),middleName:getValue('mc_sup_middle'),address:getValue('mc_sup_address'),city:getValue('mc_sup_city'),zip:getValue('mc_sup_zip')});
+  // BIR compliance: block records with characters the BIR DAT format cannot accept.
+  const badFields=supplierSpecialFieldKeys(row);
+  if(badFields.length){
+    badFields.forEach(f=>{const el=document.getElementById(f.inputId);if(el){el.classList.add('field-invalid');el.addEventListener('input',clearSupplierFieldErrors,{once:true})}});
+    const box=document.getElementById('mc_sup_validation');
+    const list=badFields.map(f=>esc(f.label)).join(', ');
+    const msg=`<strong>Cannot save: unsupported characters for BIR Compliance Exports.</strong><div>The BIR DAT format only accepts letters, numbers, spaces and . , &amp; ( ) ' / - . Please correct: <strong>${list}</strong> (remove accents/symbols such as ñ, é, #, @, *, :, ;).</div>`;
+    if(box){box.innerHTML=msg;box.style.display='block'}
+    showToast('Supplier not saved: unsupported BIR characters in '+badFields.map(f=>f.label).join(', ')+'.');
+    return;
+  }
+  supplierMaster=supplierMaster.filter(s=>normalizeTIN(s.tin)!==normalizeTIN(row.tin)).concat(row);dedupeSupplierMaster();saveAll();renderAll();['mc_sup_tin','mc_sup_registered','mc_sup_last','mc_sup_first','mc_sup_middle','mc_sup_address','mc_sup_city','mc_sup_zip'].forEach(id=>setValue(id,''));showToast('Supplier Master record saved.')
+} 
 function removeVatCategory(code){VAT_CATEGORIES=VAT_CATEGORIES.filter(c=>c.code!==code);saveAll();renderAll();showToast('VAT Category removed.')} 
 function removeAtcMaster(code){const c=normalizeATC(code);atcMaster=atcMaster.filter(a=>normalizeATC(a.atcCode)!==c);saveAll();renderAll();showToast('ATC Code removed.')} 
 function removeSupplierMaster(tin){const n=normalizeTIN(tin);supplierMaster=supplierMaster.filter(s=>normalizeTIN(s.tin)!==n);saveAll();renderAll();showToast('Supplier Master record removed.')}
@@ -1353,14 +1421,14 @@ function slpExcelSourceRows(){
   return birNonCashSourceRows();
 }
 function slpExcelSupplierAddress(t){
-  return [t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' ');
+  return birSanitize([t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' '));
 }
 function slpExcelNameFields(t){
   const parts=slpSupplierNameParts(t);
   const individual=[parts.last,parts.first,parts.middle].filter(Boolean).join(', ');
   return {
-    registeredName: parts.corp?parts.corp:'',
-    individualName: parts.corp?'':(individual||String(t.supplier||'').trim())
+    registeredName: birSanitize(parts.corp?parts.corp:''),
+    individualName: birSanitize(parts.corp?'':(individual||String(t.supplier||'').trim()))
   };
 }
 function hasVatCategoryCode(t){return Boolean(normalizeVATCategory(t?.vatCategory))}
@@ -1491,7 +1559,7 @@ function exportSLPExcel(){
   showToast('Monthly SLP Excel exported for '+activeMonthLabel()+'.');
 }
 
-function slpDatQuote(value){const s=String(value??'').replace(/[\r\n]/g,' ').trim().toUpperCase();return s?`"${s.replace(/"/g,'""')}"`:''}
+function slpDatQuote(value){const s=birSanitize(value).toUpperCase();return s?`"${s.replace(/"/g,'""')}"`:''}
 function slpDatNum(value){const n=Number(value||0);return Number.isFinite(n)?n.toFixed(2):'0.00'}
 function slpTin9(value){return normalizeTIN(value).slice(0,9)}
 function slpSupplierNameParts(t){
@@ -1515,8 +1583,8 @@ function slpSupplierNameParts(t){
 }
 function slpRegisteredName(t){
   const parts=slpSupplierNameParts(t);
-  if(parts.corp)return parts.corp;
-  return [parts.last,parts.first,parts.middle].filter(Boolean).join(' ').trim();
+  if(parts.corp)return birSanitize(parts.corp);
+  return birSanitize([parts.last,parts.first,parts.middle].filter(Boolean).join(' ').trim());
 }
 function slpCityLine(t){return String(t?.city||'').trim()}
 function validateSLPDatSourceRows(rows){
@@ -1673,7 +1741,7 @@ function qapTinBranch(value){
   return '0000';
 }
 function qapCompanyBranch(){return qapTinBranch(COMPANY_PROFILE.tin)}
-function qapTextQuote(value){const s=String(value??'').replace(/[\r\n]/g,' ').trim().toUpperCase();return `"${s.replace(/"/g,'""')}"`}
+function qapTextQuote(value){const s=birSanitize(value).toUpperCase();return `"${s.replace(/"/g,'""')}"`}
 function qapDetailRows(){
   const period=qapPeriodText();
   const detailMap=new Map();
@@ -1834,7 +1902,7 @@ function bookFullTin(value){
   if(digits.length===9)return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}`;
   return String(value||'').trim();
 }
-function supplierBookAddress(t){return [t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' ')}
+function supplierBookAddress(t){return birSanitize([t.address,t.city,t.zip].map(v=>String(v||'').trim()).filter(Boolean).join(' '))}
 function purchaseBookReference(t){return String(t.inv||t.invoiceNo||t.referenceNo||t.cv||'').trim()}
 function parseBookDate(value){
   if(value instanceof Date&&!isNaN(value))return value;

@@ -940,3 +940,16 @@ table.audit-table td{vertical-align:top}
    never render behind filter boxes, dropdowns, tables, or modals. */
 .cloud-widget{z-index:2200}
 .cloud-popover{position:fixed;top:60px;right:16px;z-index:2200;background:#fff}
+
+/* ===== Multi-year fiscal scope: year row + month row ===== */
+.month-tabs{flex-direction:column;gap:8px;align-items:stretch}
+.year-row,.month-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.year-btn{padding:7px 14px;border-radius:999px;border:1px solid var(--border2);background:var(--surface);color:var(--text);font-weight:800;font-size:12.5px;cursor:pointer;font-family:var(--font-display)}
+.year-btn:hover{border-color:var(--accent)}
+.year-btn.active{background:var(--text);border-color:var(--text);color:var(--surface)}
+.year-btn span{font-size:10px;opacity:.7;margin-left:5px;font-weight:700}
+
+/* ===== BIR supplier validation (special-character compliance) ===== */
+.field-invalid{border-color:var(--err-border)!important;background:var(--err-bg)!important;box-shadow:inset 0 0 0 1px var(--err-border)!important}
+.bir-field-validation{margin:8px 0 0;padding:10px 12px;border:1px solid var(--err-border);border-left:4px solid var(--err);border-radius:12px;background:var(--err-bg);color:#7f1d1d;font-size:12px;line-height:1.5}
+.bir-field-validation strong{color:#7f1d1d}
