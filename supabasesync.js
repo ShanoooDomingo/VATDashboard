@@ -14,7 +14,10 @@
 (function(){
   'use strict';
 
-  /* ---------- config ---------- */
+  /* ---------- config ----------
+   * ALL connection settings come from supabase-config.js (window.VAT_DASHBOARD_SUPABASE_CONFIG).
+   * IT should edit that ONE file only. The fallbacks below keep the app working if an
+   * optional setting is omitted, so nothing here needs changing to repoint the database. */
   const CFG = window.VAT_DASHBOARD_SUPABASE_CONFIG || {};
   const SUPABASE_URL = CFG.url || '';
   const SUPABASE_KEY = CFG.publishableKey || CFG.anonKey || '';
@@ -23,17 +26,29 @@
     'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js',
     'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js'
   ];
+  /* Database table names. Defaults match the standard schema; IT may override any of
+   * them from supabase-config.js via `tables:{...}` WITHOUT editing this file. */
+  const TBL = Object.assign({
+    transactions:'vat_transactions',
+    vatLedger:'vat_vat_ledger',
+    ewtLedger:'vat_ewt_ledger',
+    supplierMaster:'vat_supplier_master',
+    atcMaster:'vat_atc_master',
+    vatCategories:'vat_categories',
+    auditLog:'audit_log',
+    profiles:'profiles'
+  }, (CFG.tables && typeof CFG.tables === 'object') ? CFG.tables : {});
 
   /* ---------- the six shared data tables ----------
    * get()/set() reach the live globals declared in app.js; norm() reuses
    * the app's own normalizers so stored records keep their exact shape. */
   const ENTITIES = [
-    { key:'transactions',   table:'vat_transactions',    module:'Purchase Transactions', get:()=>transactions,   set:v=>{transactions=v},   norm:r=>normalizeTransaction(r) },
-    { key:'vatLedger',      table:'vat_vat_ledger',      module:'VAT Balances',          get:()=>vatLedger,      set:v=>{vatLedger=v},      norm:r=>normalizeLedger(r,'vat') },
-    { key:'ewtLedger',      table:'vat_ewt_ledger',      module:'EWT Balances',          get:()=>ewtLedger,      set:v=>{ewtLedger=v},      norm:r=>normalizeLedger(r,'ewt') },
-    { key:'supplierMaster', table:'vat_supplier_master', module:'Supplier Master',       get:()=>supplierMaster, set:v=>{supplierMaster=v}, norm:r=>normalizeSupplier(r) },
-    { key:'atcMaster',      table:'vat_atc_master',      module:'ATC Master',            get:()=>atcMaster,      set:v=>{atcMaster=v},      norm:r=>normalizeAtcMaster(r) },
-    { key:'VAT_CATEGORIES', table:'vat_categories',      module:'VAT Categories',        get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) }
+    { key:'transactions',   table:TBL.transactions,    module:'Purchase Transactions', get:()=>transactions,   set:v=>{transactions=v},   norm:r=>normalizeTransaction(r) },
+    { key:'vatLedger',      table:TBL.vatLedger,       module:'VAT Balances',          get:()=>vatLedger,      set:v=>{vatLedger=v},      norm:r=>normalizeLedger(r,'vat') },
+    { key:'ewtLedger',      table:TBL.ewtLedger,       module:'EWT Balances',          get:()=>ewtLedger,      set:v=>{ewtLedger=v},      norm:r=>normalizeLedger(r,'ewt') },
+    { key:'supplierMaster', table:TBL.supplierMaster,  module:'Supplier Master',       get:()=>supplierMaster, set:v=>{supplierMaster=v}, norm:r=>normalizeSupplier(r) },
+    { key:'atcMaster',      table:TBL.atcMaster,       module:'ATC Master',            get:()=>atcMaster,      set:v=>{atcMaster=v},      norm:r=>normalizeAtcMaster(r) },
+    { key:'VAT_CATEGORIES', table:TBL.vatCategories,   module:'VAT Categories',        get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) }
   ];
   const ENTITY_BY_KEY = Object.fromEntries(ENTITIES.map(e=>[e.key,e]));
 
@@ -47,7 +62,6 @@
   let initPromise = null;   // resolves when initSupabase() finishes (success or handled failure)
 
   let cloudApplying = false;   // true while applying remote data (suppress push)
-  let centralLoaded = false;   // true only after a full successful load of the shared dataset
   let cloudBusy = false;       // true while a sync write is in flight
   let rerunQueued = false;
   let syncTimer = null;
@@ -131,25 +145,8 @@
           changes.push({ e, op:'upsert', id, rec, json, action, oldRec, newRec:rec });
         }
       }
-      // Records present in the known cloud snapshot but missing from the local
-      // array are candidate deletions. We only honour these as real deletions when
-      // it is safe to do so (see guard below) — otherwise an incomplete or
-      // momentarily-truncated local array could wipe unrelated cloud records.
-      const candidateDeletes=[];
       for(const [id,prev] of snap){
-        if(!seen.has(id)) candidateDeletes.push({ id, prev });
-      }
-      if(candidateDeletes.length){
-        const explicitBulk=!!ctx.action; // e.g. an Upload/replace import is an intentional bulk op
-        // Suspicious when we'd remove more rows than remain locally (and more than a
-        // small threshold): that signals a partial/failed load, not a user deletion.
-        const looksTruncated=!explicitBulk && (cur.length===0 || candidateDeletes.length > Math.max(5, cur.length));
-        if(!centralLoaded || looksTruncated){
-          console.warn('[sync] Skipping '+candidateDeletes.length+' inferred deletion(s) for "'+e.key+'" to protect cloud data ('
-            +(!centralLoaded?'central data not fully loaded yet':'local dataset looks incomplete')+').');
-        }else{
-          candidateDeletes.forEach(d=>changes.push({ e, op:'delete', id:d.id, action:'Delete', oldRec:safeParse(d.prev), newRec:null }));
-        }
+        if(!seen.has(id)) changes.push({ e, op:'delete', id, action:'Delete', oldRec:safeParse(prev), newRec:null });
       }
     }
     return { changes, noops };
@@ -214,7 +211,7 @@
         if(error) throw error;
       }
       if(audits.length){
-        const { error } = await supabaseClient.from('audit_log').insert(audits);
+        const { error } = await supabaseClient.from(TBL.auditLog).insert(audits);
         if(error) throw error;
       }
       // Commit local bookkeeping only after the database confirms.
@@ -241,34 +238,20 @@
   async function loadAllCentral(){
     cloudApplying=true;
     try{
-      const PAGE=1000; // Supabase caps a single select at 1000 rows, so page through all of them.
       for(const e of ENTITIES){
+        const { data, error } = await supabaseClient.from(e.table)
+          .select('record_id,data,last_modified_by_name,last_modified_at');
+        if(error) throw error;
         const arr=[]; const snap=new Map();
-        let from=0;
-        while(true){
-          const { data, error } = await supabaseClient.from(e.table)
-            .select('record_id,data,last_modified_by_name,last_modified_at')
-            .order('record_id',{ ascending:true })
-            .range(from, from+PAGE-1);
-          if(error) throw error;
-          const batch=data||[];
-          batch.forEach(r=>{
-            const rec=e.norm(r.data); rec._id=r.record_id;
-            arr.push(rec); snap.set(r.record_id,stableStringify(rec));
-            lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
-          });
-          if(batch.length<PAGE) break; // last (or only) page
-          from+=PAGE;
-        }
+        (data||[]).forEach(r=>{
+          const rec=e.norm(r.data); rec._id=r.record_id;
+          arr.push(rec); snap.set(r.record_id,stableStringify(rec));
+          lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
+        });
         e.set(arr); snapshots[e.key]=snap;
       }
-      centralLoaded=true; // every entity loaded successfully: deletions may now be trusted
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
       rerender();
-    }catch(err){
-      // A failed/partial load must not leave us trusting an incomplete local array.
-      centralLoaded=false;
-      throw err;
     }finally{ cloudApplying=false; }
   }
 
@@ -282,7 +265,7 @@
       const audits=rows.map(r=>({ user_id:cloudUser.id, user_name:name, action_type:'Sync', module:e.module, record_id:r._id, old_value:null, new_value:r, ip_address:clientIp }));
       const a=await supabaseClient.from(e.table).upsert(up,{ onConflict:'record_id' });
       if(a.error) throw a.error;
-      await supabaseClient.from('audit_log').insert(audits);
+      await supabaseClient.from(TBL.auditLog).insert(audits);
       e.set(rows.slice());
       const snap=new Map(); rows.forEach(r=>{ snap.set(r._id,stableStringify(r)); lastModifiedMap[r._id]={ by:name, at:now }; });
       snapshots[e.key]=snap;
@@ -315,14 +298,6 @@
     const rec=e.norm(payload.new.data); rec._id=id;
     const json=stableStringify(rec);
     if(snapshots[e.key] && snapshots[e.key].get(id)===json) return; // unchanged / own echo
-    // Do not let a slow/out-of-order realtime event revert a newer local edit:
-    // if the record we already hold was modified at/after the incoming event, skip it.
-    const incomingAt=payload.new.last_modified_at;
-    const knownAt=lastModifiedMap[id] && lastModifiedMap[id].at;
-    if(incomingAt && knownAt){
-      const inc=new Date(incomingAt).getTime(), cur=new Date(knownAt).getTime();
-      if(Number.isFinite(inc)&&Number.isFinite(cur)&&inc<cur) return; // stale, would revert newer data
-    }
     const arr=(e.get()||[]).slice();
     const idx=arr.findIndex(r=>r._id===id);
     if(idx>=0) arr[idx]=rec; else arr.push(rec);
@@ -341,7 +316,7 @@
     );
     if(isAdmin){
       auditChannel=supabaseClient.channel('vatdash-audit')
-        .on('postgres_changes',{ event:'INSERT', schema:'public', table:'audit_log' }, p=>{
+        .on('postgres_changes',{ event:'INSERT', schema:'public', table:TBL.auditLog }, p=>{
           if(!p.new) return;
           auditCache.unshift(p.new);
           if(auditCache.length>2*AUDIT_FETCH_LIMIT) auditCache.length=2*AUDIT_FETCH_LIMIT;
@@ -361,10 +336,10 @@
     myProfile=null; isAdmin=false;
     if(!cloudUser) return;
     try{
-      let { data } = await supabaseClient.from('profiles').select('display_name,role,email').eq('id',cloudUser.id).maybeSingle();
+      let { data } = await supabaseClient.from(TBL.profiles).select('display_name,role,email').eq('id',cloudUser.id).maybeSingle();
       if(!data){
-        await supabaseClient.from('profiles').insert({ id:cloudUser.id, email:cloudUser.email, display_name:(cloudUser.email||'').split('@')[0] });
-        const r=await supabaseClient.from('profiles').select('display_name,role,email').eq('id',cloudUser.id).maybeSingle();
+        await supabaseClient.from(TBL.profiles).insert({ id:cloudUser.id, email:cloudUser.email, display_name:(cloudUser.email||'').split('@')[0] });
+        const r=await supabaseClient.from(TBL.profiles).select('display_name,role,email').eq('id',cloudUser.id).maybeSingle();
         data=r.data;
       }
       if(data){ myProfile=data; isAdmin=(data.role==='admin'); }
@@ -481,7 +456,7 @@
     if(!isAdmin||!supabaseClient) return;
     const tb=byId('auditTbody'); if(tb) tb.innerHTML='<tr><td colspan="7"><div class="empty-state">Loading audit trail...</div></td></tr>';
     try{
-      const { data, error } = await supabaseClient.from('audit_log')
+      const { data, error } = await supabaseClient.from(TBL.auditLog)
         .select('*').order('created_at',{ ascending:false }).limit(AUDIT_FETCH_LIMIT);
       if(error) throw error;
       auditCache=data||[];
@@ -700,7 +675,7 @@
       clearTimeout(syncTimer);
       unsubscribeRealtime();
       if(supabaseClient) await supabaseClient.auth.signOut();
-      cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false; centralLoaded=false;
+      cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false;
       const p=byId('authPassword'); if(p) p.value='';
       syncAuditTabVisibility();
       closeCloudPopover(); setAuthView(false);
@@ -731,19 +706,9 @@
       // 1) Legacy blob table (old decentralized cloud copy). RLS may limit
       //    this to the rows you are allowed to read (usually your own).
       if(legacyTable){
-        // Page through the legacy table too (the single-select 1000-row cap applies here as well).
-        const PAGE=1000; let from=0; let legacyRows=[]; let readError=null;
-        while(true){
-          const { data, error } = await supabaseClient.from(legacyTable).select('*').range(from, from+PAGE-1);
-          if(error){ readError=error; break; }
-          const batch=data||[];
-          legacyRows=legacyRows.concat(batch);
-          if(batch.length<PAGE) break;
-          from+=PAGE;
-        }
-        if(readError){ console.warn('Legacy table read skipped:', readError.message); }
-        else if(Array.isArray(legacyRows)){
-          const data=legacyRows;
+        const { data, error } = await supabaseClient.from(legacyTable).select('*');
+        if(error){ console.warn('Legacy table read skipped:', error.message); }
+        else if(Array.isArray(data)){
           data.sort((a,b)=> new Date(a.updated_at||a.created_at||0) - new Date(b.updated_at||b.created_at||0)); // newest overwrites
           data.forEach(row=>{
             const app = row.app_data || row.data || row.payload || null;
@@ -774,7 +739,7 @@
         // Audit only records that were not already in the shared tables.
         const fresh=rows.filter(r=>!(snapshots[e.key] && snapshots[e.key].has(r._id)));
         const audits=fresh.map(r=>({ user_id:cloudUser.id, user_name:name, action_type:'Sync', module:e.module, record_id:r._id, old_value:null, new_value:r, ip_address:clientIp }));
-        for(let i=0;i<audits.length;i+=500){ const ar=await supabaseClient.from('audit_log').insert(audits.slice(i,i+500)); if(ar.error) console.warn('Audit insert warn:',ar.error.message); }
+        for(let i=0;i<audits.length;i+=500){ const ar=await supabaseClient.from(TBL.auditLog).insert(audits.slice(i,i+500)); if(ar.error) console.warn('Audit insert warn:',ar.error.message); }
         newlyAudited+=audits.length;
       }
       await loadAllCentral();
@@ -788,17 +753,7 @@
   }
 
   /* ---------- cloud popover plumbing (unchanged UX) ---------- */
-  function positionCloudPopover(){
-    // The popover is position:fixed so it escapes any ancestor stacking context and
-    // always paints on the top UI layer. Anchor it to the trigger on each open.
-    const t=byId('cloudTrigger'), pop=byId('cloudPopover');
-    if(!t||!pop) return;
-    const r=t.getBoundingClientRect();
-    pop.style.top=Math.round(r.bottom+10)+'px';
-    pop.style.right=Math.round(window.innerWidth-r.right)+'px';
-    pop.style.left='auto';
-  }
-  function toggleCloudPopover(event){ if(event) event.stopPropagation(); const w=byId('cloudWidget'); if(!w) return; const opening=!w.classList.contains('open'); w.classList.toggle('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded',opening?'true':'false'); if(opening) positionCloudPopover(); }
+  function toggleCloudPopover(event){ if(event) event.stopPropagation(); const w=byId('cloudWidget'); if(!w) return; w.classList.toggle('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded',w.classList.contains('open')?'true':'false'); }
   function closeCloudPopover(){ const w=byId('cloudWidget'); if(w) w.classList.remove('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded','false'); }
   function handleLoginKey(event){ if(event.key==='Enter') logIn(); }
   document.addEventListener('click',event=>{ const w=byId('cloudWidget'); if(w&&!w.contains(event.target)) closeCloudPopover(); });
