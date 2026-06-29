@@ -503,7 +503,9 @@ function handleXLSX(e){
 function importIssueLabel(type){return({book:'Purchase Transactions',vatLedger:'VAT Balances',ewtLedger:'EWT Balances',vatCategoryMaster:'VAT Categories',atcMaster:'ATC Master',supplierMaster:'Supplier Master'})[type]||'Import'}
 function importHtmlEscape(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
 function clearImportIssueReport(){const box=document.getElementById('importIssueReport');if(box){box.style.display='none';box.innerHTML=''}window.__lastImportIssues=[]}
-function addImportIssue(issues,rowNumber,field,message,row){issues.push({rowNumber,field,message,cv:pick(row||{},'cv_no','cv','cv_number','voucher_no','check_voucher'),voucher:pick(row||{},'voucher_name','voucher','voucher_payee','booked_payee','book_payee','payee','supplier_name','supplier','vendor'),rawRow:row||{}})}
+function addImportIssue(issues,rowNumber,field,message,row){issues.push({rowNumber,field,message,cv:pick(row||{},'cv_no','cv','cv_number','voucher_no','check_voucher'),voucher:pick(row||{},'voucher_name','voucher','voucher_payee','booked_payee','book_payee','payee','supplier_name','supplier','vendor'),date:pick(row||{},'date','payment_date','document_date','posting_date'),amount:pick(row||{},'amount','total_amount','gross_amount','vat_amount','ewt_amount','balance','ledger_amount'),rawRow:row||{}})}
+// Human-readable reasons for the "not uploaded" preview, grouped from per-field issues.
+function importErrorReasonFromField(field,message){return message||('Invalid '+field)}
 function showImportIssueReport(issues,added,type,fileName){
   window.__lastImportIssues=issues.slice();
   const box=document.getElementById('importIssueReport');
@@ -548,39 +550,78 @@ function importDupLooseKey(type,r){
   if(type==='book')return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'sp',dupNorm(r.supplier),'at',dupNorm(r.accountingTitle),'am',dupMoney(transactionAmount(r))].join('|');
   return ['cv',dupNorm(r.cv),'am',dupMoney(r.amount)].join('|');
 }
+// Row preview fields shown in the upload summary's "not uploaded" list.
+function importPreviewFields(type,rec){
+  if(type==='book')return{cv:String(rec.cv||'').trim(),date:String(rec.date||'').trim(),supplier:String(rec.supplier||rec.voucherName||'').trim(),amount:transactionAmount(rec)};
+  return{cv:String(rec.cv||'').trim(),date:String(rec.date||'').trim(),supplier:String(rec.supplier||'').trim(),amount:Number(rec.amount||0)};
+}
 // Classify freshly-built import records against the records already saved.
-// Returns kept rows (new + near-duplicates, both added) plus counts.
-function classifyImportDuplicates(type,built,existing){
+// Returns kept rows (new + near-duplicates, both added) plus per-row detail
+// for the upload preview. `meta[i].row` is the originating XLSX row number.
+function classifyImportDuplicates(type,built,existing,meta){
   const exactSet=new Set();
   const looseSet=new Set();
   (existing||[]).forEach(r=>{exactSet.add(importDupFingerprint(type,r));looseSet.add(importDupLooseKey(type,r))});
-  const kept=[],nearReview=[];let exactDup=0,nearDup=0;
-  built.forEach(r=>{
+  const kept=[],nearReview=[],exactList=[],nearList=[];let exactDup=0,nearDup=0;
+  built.forEach((r,i)=>{
+    const rowNo=(meta&&meta[i]&&meta[i].row)||'';
     const fp=importDupFingerprint(type,r);
-    if(exactSet.has(fp)){exactDup++;return;}            // perfect copy -> skip
+    if(exactSet.has(fp)){                                 // perfect copy -> skip
+      exactDup++;
+      exactList.push(Object.assign({row:rowNo,reason:'Exact duplicate already exists in the database'},importPreviewFields(type,r)));
+      return;
+    }
     const loose=importDupLooseKey(type,r);
-    const isNear=looseSet.has(loose);                   // similar but not identical
-    kept.push(r);                                       // never auto-skip a near-duplicate
-    exactSet.add(fp);looseSet.add(loose);               // dedupe within the same file too
-    if(isNear){nearDup++;nearReview.push(r)}
+    const isNear=looseSet.has(loose);                    // similar but not identical
+    kept.push(r);                                        // never auto-skip a near-duplicate
+    exactSet.add(fp);looseSet.add(loose);                // dedupe within the same file too
+    if(isNear){nearDup++;nearReview.push(r);nearList.push(Object.assign({row:rowNo,reason:'Near-duplicate of an existing record — added and flagged for review'},importPreviewFields(type,r)))}
   });
-  return {kept,nearReview,exactDup,nearDup};
+  return {kept,nearReview,exactDup,nearDup,exactList,nearList};
+}
+function uploadSummaryAmount(v){const n=Number(v);return Number.isFinite(n)&&String(v??'').trim()!==''?pesoText(n):String(v||'')}
+function uploadPreviewRowsHtml(entries){
+  return entries.map(e=>`<tr>
+      <td class="mono">${importHtmlEscape(e.row||'—')}</td>
+      <td class="mono">${importHtmlEscape(e.cv||'—')}</td>
+      <td class="mono">${importHtmlEscape(e.date||'—')}</td>
+      <td>${importHtmlEscape(e.supplier||'—')}</td>
+      <td class="mono num">${importHtmlEscape(uploadSummaryAmount(e.amount))}</td>
+      <td>${importHtmlEscape(e.reason||'—')}</td>
+    </tr>`).join('');
 }
 function showUploadSummary(stats){
   const modal=document.getElementById('uploadSummaryModal');
   const body=document.getElementById('uploadSummaryBody');
   if(!modal||!body)return;
-  const reviewNote=stats.nearDup>0?`<div class="upload-summary-review">${stats.nearDup} near-duplicate row(s) were added but look similar to existing records. They were <strong>not</strong> skipped or overwritten — please review them in ${importHtmlEscape(stats.label)}.</div>`:'';
+  // Build the "not uploaded" preview: validation errors + exact duplicates skipped.
+  const notUploaded=[...(stats.errorList||[]),...(stats.exactList||[])]
+    .sort((a,b)=>(Number(a.row)||0)-(Number(b.row)||0));
+  const review=stats.nearList||[];
+  const previewTable=(title,note,entries)=>!entries.length?'':`
+    <div class="upload-preview-block">
+      <div class="upload-preview-title">${importHtmlEscape(title)} <span>${entries.length}</span></div>
+      ${note?`<div class="upload-preview-note">${importHtmlEscape(note)}</div>`:''}
+      <div class="upload-preview-scroll"><table class="upload-preview-table"><thead><tr><th>Row</th><th>CV / Ref</th><th>Date</th><th>Supplier / Payee</th><th>Amount</th><th>Reason not uploaded</th></tr></thead><tbody>${uploadPreviewRowsHtml(entries)}</tbody></table></div>
+    </div>`;
+  const reviewTable=!review.length?'':`
+    <div class="upload-preview-block">
+      <div class="upload-preview-title warn">Added — flagged for review <span>${review.length}</span></div>
+      <div class="upload-preview-note">These rows were added (never skipped or overwritten) because they look similar to existing records but are not exact copies. Please review them in ${importHtmlEscape(stats.label)}.</div>
+      <div class="upload-preview-scroll"><table class="upload-preview-table"><thead><tr><th>Row</th><th>CV / Ref</th><th>Date</th><th>Supplier / Payee</th><th>Amount</th><th>Why flagged</th></tr></thead><tbody>${uploadPreviewRowsHtml(review)}</tbody></table></div>
+    </div>`;
   body.innerHTML=`
     <div class="upload-summary-grid">
       <div class="upload-stat"><div class="upload-stat-num">${stats.totalRows}</div><div class="upload-stat-label">Total rows in file</div></div>
-      <div class="upload-stat ok"><div class="upload-stat-num">${stats.added}</div><div class="upload-stat-label">New added</div></div>
-      <div class="upload-stat muted"><div class="upload-stat-num">${stats.exactDup}</div><div class="upload-stat-label">Existing skipped</div></div>
-      <div class="upload-stat warn"><div class="upload-stat-num">${stats.nearDup}</div><div class="upload-stat-label">Need review</div></div>
-      <div class="upload-stat err"><div class="upload-stat-num">${stats.errors}</div><div class="upload-stat-label">Rows with errors</div></div>
+      <div class="upload-stat ok"><div class="upload-stat-num">${stats.added}</div><div class="upload-stat-label">Successfully uploaded</div></div>
+      <div class="upload-stat muted"><div class="upload-stat-num">${stats.exactDup}</div><div class="upload-stat-label">Skipped (duplicates)</div></div>
+      <div class="upload-stat warn"><div class="upload-stat-num">${stats.nearDup}</div><div class="upload-stat-label">Requiring review</div></div>
+      <div class="upload-stat err"><div class="upload-stat-num">${stats.errors}</div><div class="upload-stat-label">Not uploaded (errors)</div></div>
     </div>
     <div class="upload-summary-meta">${importHtmlEscape(stats.label)}${stats.fileName?' · '+importHtmlEscape(stats.fileName):''}</div>
-    ${reviewNote}`;
+    ${(!notUploaded.length&&!review.length)?'<div class="upload-summary-review ok-note">All rows uploaded successfully. No duplicates, errors, or rows needing review.</div>':''}
+    ${previewTable('Not uploaded','These rows were not added. Fix the reason and re-upload if needed.',notUploaded)}
+    ${reviewTable}`;
   modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
 }
 function closeUploadSummary(){const m=document.getElementById('uploadSummaryModal');if(m){m.classList.remove('visible');m.setAttribute('aria-hidden','true')}}
@@ -591,6 +632,7 @@ function importRows(rows,type,fileInput,fileName){
   const replace=document.getElementById('replaceOnImport').checked;
   let added=0,skipped=0;
   const built=[];
+  const builtMeta=[];   // parallel to built: { row: xlsxRowNumber } for the upload preview
   const issues=[];
   rows.slice(1).forEach((vals,rowOffset)=>{
     const xlsxRowNumber=rowOffset+2;
@@ -625,6 +667,7 @@ function importRows(rows,type,fileInput,fileName){
       const amount=pick(row,'amount','purchase_amount','base_amount','tax_base_amount','vatable_amount','vatable','non_vatable_amount','non_vat_amount');
       const total=pick(row,'total_amount','total','gross_amount','gross');
       built.push(normalizeTransaction({_id:makeId('tx'),voucherName,supplier,tin,cv,inv:pick(row,'invoice_no','invoice','or_no'),date,description:pick(row,'description','particulars','nature'),accountingTitle,bankAccount,amount,vatCategory,total,atcCode,manualStatus:pick(row,'compliance','verification','status'),reviewNote:pick(row,'review_note','note'),lastReviewed:'',address:found?found.address:pick(row,'registered_address','address'),city:found?found.city:pick(row,'city'),zip:found?found.zip:pick(row,'zip_code','zip')}));
+      builtMeta.push({row:xlsxRowNumber});
       added++;return;
     }
     if(type==='vatLedger'){
@@ -634,7 +677,7 @@ function importRows(rows,type,fileInput,fileName){
       if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
       if(!rawAmount){addImportIssue(issues,xlsxRowNumber,'vat_amount','Missing VAT balance amount.',row);bad=true}
       if(bad){skipped++;return}
-      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});added++;return;
+      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});builtMeta.push({row:xlsxRowNumber});added++;return;
     }
     if(type==='ewtLedger'){
       const cv=pick(row,'cv_no','cv','cv_number');
@@ -643,7 +686,7 @@ function importRows(rows,type,fileInput,fileName){
       if(!cv){addImportIssue(issues,xlsxRowNumber,'cv_no','Missing CV number.',row);bad=true}
       if(!rawAmount){addImportIssue(issues,xlsxRowNumber,'ewt_amount','Missing EWT balance amount.',row);bad=true}
       if(bad){skipped++;return}
-      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});added++;return;
+      built.push({cv,supplier:pick(row,'voucher_name','supplier_name','supplier','vendor'),date:pick(row,'date','posting_date'),amount:parseMoney(rawAmount),account:pick(row,'ledger_account','account'),ref:pick(row,'reference','ref')});builtMeta.push({row:xlsxRowNumber});added++;return;
     }
     if(type==='vatCategoryMaster'){
       const rawCode=pick(row,'vat_category','vat_category_code','code','category');
@@ -679,15 +722,14 @@ function importRows(rows,type,fileInput,fileName){
   // skipped; near-duplicates are added and flagged for review; masters keep their
   // existing dedupe-by-key behaviour. "Replace" still wipes-then-adds on request.
   const errors=skipped;        // rows dropped by validation = errors
-  let exactDup=0,nearDup=0,newAdded=added;
+  let exactDup=0,nearDup=0,newAdded=added,exactList=[],nearList=[];
   if(type==='book'||type==='vatLedger'||type==='ewtLedger'){
-    const isLedger=type!=='book';
     const existingArr = replace ? [] : (type==='book'?transactions.map(normalizeTransaction):(type==='vatLedger'?vatLedger:ewtLedger));
-    const cls=classifyImportDuplicates(type,built,existingArr);
+    const cls=classifyImportDuplicates(type,built,existingArr,builtMeta);
     if(type==='book'){if(replace)transactions=[];transactions=transactions.concat(cls.kept)}
     else if(type==='vatLedger'){if(replace)vatLedger=[];vatLedger=vatLedger.concat(cls.kept)}
     else{if(replace)ewtLedger=[];ewtLedger=ewtLedger.concat(cls.kept)}
-    exactDup=cls.exactDup;nearDup=cls.nearDup;newAdded=cls.kept.length-cls.nearDup;
+    exactDup=cls.exactDup;nearDup=cls.nearDup;newAdded=cls.kept.length-cls.nearDup;exactList=cls.exactList;nearList=cls.nearList;
   }
   else if(type==='vatCategoryMaster'){if(replace)VAT_CATEGORIES=[];VAT_CATEGORIES=VAT_CATEGORIES.concat(built);dedupeVatCategories()}
   else if(type==='atcMaster'){if(replace)atcMaster=[];atcMaster=atcMaster.concat(built);dedupeAtcMaster()}
@@ -697,8 +739,16 @@ function importRows(rows,type,fileInput,fileName){
   else{document.getElementById('importPanel').classList.remove('visible')}
   if(fileInput)fileInput.value='';
   if(type==='book'||type==='vatLedger'||type==='ewtLedger'){
-    showUploadSummary({totalRows:rows.length-1,added:newAdded,exactDup,nearDup,errors,label:importIssueLabel(type),fileName});
-    showToast(`Upload complete: ${newAdded} new, ${exactDup} duplicate(s) skipped, ${nearDup} for review${errors?`, ${errors} error(s)`:''}.`);
+    // Aggregate validation failures into one "not uploaded" entry per source row.
+    const errMap=new Map();
+    issues.forEach(it=>{
+      const key=it.rowNumber;
+      if(!errMap.has(key))errMap.set(key,{row:it.rowNumber,cv:it.cv||'',date:it.date||'',supplier:it.voucher||'',amount:it.amount||'',reasons:[]});
+      errMap.get(key).reasons.push(importErrorReasonFromField(it.field,it.message));
+    });
+    const errorList=[...errMap.values()].map(e=>({row:e.row,cv:e.cv,date:e.date,supplier:e.supplier,amount:e.amount,reason:e.reasons.join('; ')}));
+    showUploadSummary({totalRows:rows.length-1,added:newAdded,exactDup,nearDup,errors:errorList.length,errorList,exactList,nearList,label:importIssueLabel(type),fileName});
+    showToast(`Upload complete: ${newAdded} new, ${exactDup} duplicate(s) skipped, ${nearDup} for review${errorList.length?`, ${errorList.length} not uploaded`:''}.`);
   }else{
     showToast(`${added} rows imported${skipped?`; ${skipped} skipped with issue report`:''}.`);
   }
@@ -1345,6 +1395,44 @@ function supplierLookupSummary(t){const parts=[];if(t.address)parts.push(t.addre
 // Characters the BIR DAT/Reliefs format accepts: A-Z, 0-9, space and . , & ( ) ' / -
 const BIR_ALLOWED_RE=/^[A-Za-z0-9 .,&()'\/-]*$/;
 function supplierFieldHasSpecial(value){const v=String(value??'').trim();if(!v)return false;return !BIR_ALLOWED_RE.test(v)}
+// List the specific unsupported characters in a value, for a clear validation
+// message. Smart quotes/dashes are first mapped to their ASCII equivalents (as
+// birSanitize does), so only genuinely unrepresentable characters are reported
+// (accented letters, symbols like # % * @ ₱ ™, emoji, etc.).
+function birUnsupportedChars(value){
+  const s=String(value??'').replace(/[“”]/g,'"').replace(/[‘’]/g,"'").replace(/[–—]/g,'-');
+  const bad=[];const seen=new Set();
+  for(const ch of s){if(ch===' '||ch==='\t')continue;if(BIR_ALLOWED_RE.test(ch))continue;if(seen.has(ch))continue;seen.add(ch);bad.push(ch)}
+  return bad;
+}
+// Supplier fields actually written into each DAT export. QAP DAT outputs only the
+// supplier NAME fields; SLP DAT also outputs registered address, city, and ZIP.
+// Validation is therefore scoped to exactly the supplier fields a given DAT uses,
+// and to nothing else on the dashboard.
+function birDatSupplierFields(report){
+  const nameFields=[['registeredName','Registered Name'],['lastName','Registered Last Name'],['firstName','Registered First Name'],['middleName','Registered Middle Name']];
+  if(report==='qapDat'||report==='qapExcel')return nameFields;
+  return nameFields.concat([['address','Registered Address'],['city','City'],['zip','ZIP Code']]);
+}
+// Block a DAT export when supplier info carries characters the BIR format cannot
+// represent. Rows the user has explicitly flagged with a manual supplier override
+// are respected (the user has taken responsibility) and exempt entries are skipped.
+function birSupplierSpecialBlockers(rows,report){
+  const fields=birDatSupplierFields(report);
+  const issues=[];
+  (rows||[]).forEach(t=>{
+    if(typeof isExemptEntry==='function'&&isExemptEntry(t))return;
+    if(t&&t.supplierManualOverride)return;
+    const parts=[];
+    fields.forEach(([key,label])=>{
+      const val=t&&t[key];
+      const chars=birUnsupportedChars(val);
+      if(chars.length)parts.push(`${label} "${String(val||'').trim()}" → unsupported: ${chars.join(' ')}`);
+    });
+    if(parts.length)issues.push(birIssue(t.cv,t.voucherName,t.inv,'Supplier info has characters BIR cannot export — correct in Supplier Master (or enable Manual intervention on the line): '+parts.join('; ')));
+  });
+  return issues;
+}
 // Make any text safe for BIR export: transliterate accents (ñ->N, é->E…), drop
 // unsupported characters, collapse spaces. Preserves as much of the original as possible.
 function birSanitize(value){
@@ -1807,6 +1895,9 @@ function slpDatRows(){
 }
 function exportSLPDAT(){
   if(activeMonth==='all'){showToast('Select one month before exporting SLP DAT.');return}
+  // Central gate also blocks supplier info with BIR-unsupported special characters.
+  const gate=birValidationIssuesForExport('slpDat');
+  if(gate.length){showBIRValidationIssues('Summary List of Purchases - DAT',gate);return}
   const dat=slpDatRows();
   if(dat.validationIssues&&dat.validationIssues.length){showSLPDatValidationIssues(dat.validationIssues);return}
   if(dat.details.length===0){showToast('No SLP DAT detail rows to export for '+activeMonthLabel()+'.');return}
@@ -2309,8 +2400,8 @@ function birValidationIssuesForExport(report){
   if(blockers.length)return dedupeBirIssues(blockers);
   let reportIssues=[];
   if(report==='slpExcel'){reportIssues=validateSLPDatSourceRows(slpExcelSourceRows()).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')))}
-  else if(report==='slpDat'){reportIssues=(slpDatRows().validationIssues||[]).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')))}
-  else if(report==='qapExcel'||report==='qapDat')reportIssues=validateQAPSourceRows(ewtSourceRows());
+  else if(report==='slpDat'){reportIssues=(slpDatRows().validationIssues||[]).map(i=>birIssue(i.cv,i.voucher,i.invoice,'missing '+i.missing.join(', ')));reportIssues=reportIssues.concat(birSupplierSpecialBlockers(slpExcelSourceRows(),'slpDat'))}
+  else if(report==='qapExcel'||report==='qapDat'){reportIssues=validateQAPSourceRows(ewtSourceRows());if(report==='qapDat')reportIssues=reportIssues.concat(birSupplierSpecialBlockers(ewtSourceRows(),'qapDat'))}
   else if(report==='purchaseBook')reportIssues=validateBookSourceRows(birSourceRows(),'purchase');
   else if(report==='cashBook')reportIssues=validateBookSourceRows(birCashSourceRows(),'cash');
   return dedupeBirIssues(reportIssues);
