@@ -555,6 +555,29 @@ function importDupLooseKey(type,r){
   // as genuinely new (uploaded), not flagged as near-duplicates.
   return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'sp',dupNorm(r.supplier),'ds',dupNorm(r.description),'am',dupMoney(r.amount)].join('|');
 }
+// Match key for backfilling Description onto pre-existing ledger rows WITHOUT
+// using Description itself (old records saved before Description existed are blank).
+function ledgerBackfillKey(r){return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'sp',dupNorm(r.supplier),'am',dupMoney(r.amount)].join('|')}
+// Safe migration: fill blank Descriptions on existing VAT/EWT balance rows from a
+// re-uploaded file. Adds NO new rows and NEVER overwrites a non-blank Description.
+function backfillLedgerDescriptions(type,built){
+  const arr=type==='vatLedger'?vatLedger:ewtLedger;
+  const ledgerType=type==='vatLedger'?'vat':'ewt';
+  // Bucket ALL existing rows by match key, blank-Description rows first so they
+  // get filled before a same-key row that already has a Description.
+  const buckets=new Map();
+  arr.forEach(r=>{const rec=normalizeLedger(r,ledgerType);const k=ledgerBackfillKey(rec);if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(r)});
+  buckets.forEach(list=>list.sort((a,b)=>(String(a.description||'').trim()?1:0)-(String(b.description||'').trim()?1:0)));
+  let filled=0,alreadyHad=0,unmatched=0;
+  built.forEach(b=>{
+    const desc=String(b.description||'').trim();
+    if(!desc)return;
+    const list=buckets.get(ledgerBackfillKey(b));
+    if(list&&list.length){const target=list.shift();if(String(target.description||'').trim()===''){target.description=desc;filled++}else alreadyHad++}
+    else unmatched++;
+  });
+  return {filled,alreadyHad,unmatched};
+}
 // Row preview fields shown in the upload summary's "not uploaded" list.
 function importPreviewFields(type,rec){
   if(type==='book')return{cv:String(rec.cv||'').trim(),date:String(rec.date||'').trim(),supplier:String(rec.supplier||rec.voucherName||'').trim(),amount:transactionAmount(rec)};
@@ -615,16 +638,18 @@ function showUploadSummary(stats){
       <div class="upload-preview-note">These rows were added (never skipped or overwritten) because they look similar to existing records but are not exact copies. Please review them in ${importHtmlEscape(stats.label)}.</div>
       <div class="upload-preview-scroll"><table class="upload-preview-table"><thead><tr><th>Row</th><th>CV / Ref</th><th>Date</th><th>Supplier / Payee</th><th>Amount</th><th>Why flagged</th></tr></thead><tbody>${uploadPreviewRowsHtml(review)}</tbody></table></div>
     </div>`;
+  const bf=!!stats.backfillNote;
   body.innerHTML=`
     <div class="upload-summary-grid">
       <div class="upload-stat"><div class="upload-stat-num">${stats.totalRows}</div><div class="upload-stat-label">Total rows in file</div></div>
-      <div class="upload-stat ok"><div class="upload-stat-num">${stats.added}</div><div class="upload-stat-label">Successfully uploaded</div></div>
-      <div class="upload-stat muted"><div class="upload-stat-num">${stats.exactDup}</div><div class="upload-stat-label">Skipped (duplicates)</div></div>
+      <div class="upload-stat ok"><div class="upload-stat-num">${stats.added}</div><div class="upload-stat-label">${bf?'Descriptions filled':'Successfully uploaded'}</div></div>
+      <div class="upload-stat muted"><div class="upload-stat-num">${stats.exactDup}</div><div class="upload-stat-label">${bf?'Already had Description':'Skipped (duplicates)'}</div></div>
       <div class="upload-stat warn"><div class="upload-stat-num">${stats.nearDup}</div><div class="upload-stat-label">Requiring review</div></div>
       <div class="upload-stat err"><div class="upload-stat-num">${stats.errors}</div><div class="upload-stat-label">Not uploaded (errors)</div></div>
     </div>
     <div class="upload-summary-meta">${importHtmlEscape(stats.label)}${stats.fileName?' · '+importHtmlEscape(stats.fileName):''}</div>
-    ${(!notUploaded.length&&!review.length)?'<div class="upload-summary-review ok-note">All rows uploaded successfully. No duplicates, errors, or rows needing review.</div>':''}
+    ${stats.backfillNote?`<div class="upload-summary-review ok-note">${importHtmlEscape(stats.backfillNote)}</div>`:''}
+    ${(!stats.backfillNote&&!notUploaded.length&&!review.length)?'<div class="upload-summary-review ok-note">All rows uploaded successfully. No duplicates, errors, or rows needing review.</div>':''}
     ${previewTable('Not uploaded','These rows were not added. Fix the reason and re-upload if needed.',notUploaded)}
     ${reviewTable}`;
   modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
@@ -726,6 +751,17 @@ function importRows(rows,type,fileInput,fileName){
   // Duplicate-aware merge for the transaction-style modules. Exact copies are
   // skipped; near-duplicates are added and flagged for review; masters keep their
   // existing dedupe-by-key behaviour. "Replace" still wipes-then-adds on request.
+  // Safe Description backfill mode for VAT/EWT Balances: fill blanks only, add nothing.
+  const backfillOnly=(type==='vatLedger'||type==='ewtLedger')&&!!document.getElementById('backfillDescOnly')?.checked;
+  if(backfillOnly){
+    const res=backfillLedgerDescriptions(type,built);
+    saveAll();renderAll();
+    if(fileInput)fileInput.value='';
+    document.getElementById('importPanel').classList.remove('visible');
+    showUploadSummary({totalRows:rows.length-1,added:res.filled,exactDup:res.alreadyHad,nearDup:0,errors:0,errorList:[],exactList:[],nearList:[],label:importIssueLabel(type)+' — Description backfill',fileName,backfillNote:`${res.filled} blank Description(s) filled; ${res.alreadyHad} already had a Description; ${res.unmatched} upload row(s) had no matching existing record. No new rows were added and no existing Description was overwritten.`});
+    showToast(`Description backfill: ${res.filled} filled, ${res.alreadyHad} already set, ${res.unmatched} unmatched. No rows added.`);
+    return;
+  }
   const errors=skipped;        // rows dropped by validation = errors
   let exactDup=0,nearDup=0,newAdded=added,exactList=[],nearList=[];
   if(type==='book'||type==='vatLedger'||type==='ewtLedger'){
@@ -1050,6 +1086,17 @@ function balanceHoverText(g){
   const both=isBalanced(g.vatDiff)&&isBalanced(g.ewtDiff);
   return `VAT / EWT balance check — ${both?'Balanced':'Review balances'}\n${balanceDeltaText('VAT',g.vatDiff)}\n${balanceDeltaText('EWT',g.ewtDiff)}`;
 }
+// Rich (visible) hover tooltip content for the balance check cell.
+function balanceDeltaHtml(label,diff){
+  const d=Number(diff||0);
+  if(isBalanced(d))return `<div class="bal-tip-row"><strong>${label}:</strong> <span class="bal-ok">Balanced (${pesoText(0)})</span></div>`;
+  const dir=d>0?'over':'short';
+  const cls=d>0?'bal-over':'bal-short';
+  return `<div class="bal-tip-row"><strong>${label}:</strong> <span class="${cls}">${pesoText(Math.abs(d))} ${dir}</span></div>`;
+}
+function balanceHoverHtml(g){
+  return `<div class="bal-tip-head">VAT / EWT balance difference</div>${balanceDeltaHtml('VAT',g.vatDiff)}${balanceDeltaHtml('EWT',g.ewtDiff)}<div class="bal-tip-note">Difference = computed (from Purchase Transactions) − uploaded ledger balance.</div>`;
+}
 
 function togglePurchaseInfo(){document.getElementById('purchaseInfoPanel')?.classList.toggle('visible')}
 function birVisualWarningReportLabel(report){
@@ -1291,7 +1338,7 @@ function renderWorking(){
     const reviewReasons=groupReviewReasons(g);
     tr.className='summary-row'+(open?' active-cv':'')+(reviewReasons.length?' review-needed-row':'');
     if(reviewReasons.length)tr.title=reviewTitleFromReasons(reviewReasons);
-    tr.innerHTML=`<td>${esc(g.dateDisplay||'--')}</td><td><div class="sup-cell"><svg class="chevron${open?' open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><div><div class="sup-name">${esc(g.cv)}</div></div></div></td><td>${esc(g.voucherNames)}</td><td class="num">${amountWithBalance(g.bookVat,g.vatDiff)}</td><td class="num">${amountWithBalance(g.bookEwt,g.ewtDiff)}</td><td class="num">${peso(cvTotal)}</td><td title="${attr(balanceHover)}">${check}</td><td>${scoreBar(g.status)}</td>`;
+    tr.innerHTML=`<td>${esc(g.dateDisplay||'--')}</td><td><div class="sup-cell"><svg class="chevron${open?' open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><div><div class="sup-name">${esc(g.cv)}</div></div></div></td><td>${esc(g.voucherNames)}</td><td class="num">${amountWithBalance(g.bookVat,g.vatDiff)}</td><td class="num">${amountWithBalance(g.bookEwt,g.ewtDiff)}</td><td class="num">${peso(cvTotal)}</td><td title="${attr(balanceHover)}"><span class="column-info-wrap balance-info" tabindex="0">${check}<span class="column-tooltip balance-tip">${balanceHoverHtml(g)}</span></span></td><td>${scoreBar(g.status)}</td>`;
     tr.addEventListener('click',()=>{focusedCV=g.cv;openCVs.clear();openCVs.add(g.cv);renderWorking()});
     tbody.appendChild(tr);
   });

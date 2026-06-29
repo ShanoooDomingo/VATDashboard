@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body class="auth-locked">
 
@@ -64,7 +64,7 @@
     <h3>Import XLSX for Purchase Transactions</h3>
     <div class="helper-text"><strong>QuickBooks working papers are detected automatically.</strong> Just upload the generated <em>Transaction Detail by Account</em> (purchases), <em>VAT Summary / Tax Detail Report</em>, or withholding <em>Transaction Report</em> — the system identifies the file type and maps the columns for you. The Import type below is only used for non-QuickBooks template files.</div>
     <p id="importHelp"></p>
-    <div class="form-grid"><div class="form-group"><label>Import type (template files only)</label><select id="importType" onchange="updateImportHelp()"><option value="book">Purchase transactions / verification sheet</option><option value="vatLedger">VAT Balances</option><option value="ewtLedger">EWT Balances</option><option value="vatCategoryMaster">VAT Categories</option><option value="atcMaster">ATC Master / Database EWT Rates</option><option value="supplierMaster">Supplier Master</option></select></div><div class="form-group"><label>Import mode</label><label class="inline-check"><input type="checkbox" id="replaceOnImport"/> Replace existing data for this import type</label></div></div>
+    <div class="form-grid"><div class="form-group"><label>Import type (template files only)</label><select id="importType" onchange="updateImportHelp()"><option value="book">Purchase transactions / verification sheet</option><option value="vatLedger">VAT Balances</option><option value="ewtLedger">EWT Balances</option><option value="vatCategoryMaster">VAT Categories</option><option value="atcMaster">ATC Master / Database EWT Rates</option><option value="supplierMaster">Supplier Master</option></select></div><div class="form-group"><label>Import mode</label><label class="inline-check"><input type="checkbox" id="replaceOnImport"/> Replace existing data for this import type</label><label class="inline-check" title="VAT/EWT Balances only: matches existing rows by CV, date, supplier and amount and fills in only blank Descriptions. Adds no new rows and never overwrites an existing Description."><input type="checkbox" id="backfillDescOnly"/> Backfill missing Descriptions only (VAT/EWT Balances — no new rows)</label></div></div>
     <div class="drop-zone" id="dropZone" onclick="document.getElementById('xlsxInput').click()"><p>Drop your XLSX file here or click to browse</p><span>Supports .xlsx files only</span></div>
     <input type="file" id="xlsxInput" accept=".xlsx,.xls" onchange="handleXLSX(event)"/>
     <div class="form-actions" style="margin-top:10px"><button class="btn" onclick="downloadTemplate()">Download XLSX template</button><button class="btn" onclick="toggleImport()">Close</button></div>
@@ -241,10 +241,10 @@
 </div>
 <div class="toast" id="toast"></div>
 <div class="supabase-error-box" id="supabaseErrorBox"></div>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 
-<script src="supabase-config.js?v=4"></script>
-<script src="supabase-sync.js?v=4"></script>
+<script src="supabase-config.js?v=5"></script>
+<script src="supabase-sync.js?v=5"></script>
 
 </body>
 </html>
