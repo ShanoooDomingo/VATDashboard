@@ -949,6 +949,10 @@ table.audit-table td{vertical-align:top}
 .year-btn.active{background:var(--text);border-color:var(--text);color:var(--surface)}
 .year-btn span{font-size:10px;opacity:.7;margin-left:5px;font-weight:700}
 
+/* ===== VAT Category / ATC Code conflict warning ===== */
+.atc-vat-warning{margin-top:6px;padding:7px 10px;border:1px solid var(--err-border,#fca5a5);border-left:4px solid var(--err,#dc2626);border-radius:9px;background:var(--err-bg,#fef2f2);color:#7f1d1d;font-size:11.5px;line-height:1.45;font-weight:600}
+.ledger-desc{font-size:11px;color:var(--text2);margin-top:2px;font-style:italic}
+
 /* ===== Upload summary modal ===== */
 .upload-summary-dialog{width:min(560px,calc(100vw - 36px));max-height:none;padding:20px 22px 22px;background:#fff}
 .upload-summary-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
