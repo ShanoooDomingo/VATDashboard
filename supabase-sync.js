@@ -81,6 +81,34 @@
   let auditCache = [];
   const AUDIT_FETCH_LIMIT = 1000;
 
+  /* ---------------------------------------------------------------------
+   * Service-layer paginated fetch.
+   *
+   * Supabase (PostgREST) returns AT MOST 1,000 rows per request regardless
+   * of how many rows exist. Any plain .select() therefore silently caps at
+   * 1,000 and "loses" the rest. This helper pages through the WHOLE table in
+   * fixed-size blocks using .range() until a short page is returned, so the
+   * entire dataset is always loaded no matter how many months/years/records
+   * accumulate. PAGE_SIZE is a batching window, NOT a data cap — there is no
+   * 1,000-row limit anywhere. If we ever swap database providers, this single
+   * function is the only place that needs a matching pagination strategy. */
+  const PAGE_SIZE = 1000;
+  async function fetchAllRows(table, columns, decorate){
+    const out=[];
+    let from=0;
+    for(;;){
+      let q=supabaseClient.from(table).select(columns).range(from,from+PAGE_SIZE-1);
+      if(typeof decorate==='function') q=decorate(q);
+      const { data, error } = await q;
+      if(error) throw error;
+      const batch=data||[];
+      out.push(...batch);
+      if(batch.length<PAGE_SIZE) break;   // last (short) page reached
+      from+=PAGE_SIZE;
+    }
+    return out;
+  }
+
   /* ---------- small DOM helpers (same UX as before) ---------- */
   function byId(id){ return document.getElementById(id); }
   function text(id,v){ const el=byId(id); if(el) el.textContent=v; }
@@ -239,9 +267,8 @@
     cloudApplying=true;
     try{
       for(const e of ENTITIES){
-        const { data, error } = await supabaseClient.from(e.table)
-          .select('record_id,data,last_modified_by_name,last_modified_at');
-        if(error) throw error;
+        // Page through the FULL table (works around the 1,000-row request cap).
+        const data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at');
         const arr=[]; const snap=new Map();
         (data||[]).forEach(r=>{
           const rec=e.norm(r.data); rec._id=r.record_id;
@@ -446,6 +473,7 @@
     if(byId('tabAuditBtn')) byId('tabAuditBtn').classList.add('active');
     if(byId('auditSheet')) byId('auditSheet').classList.add('active');
     const mt=byId('monthTabs'); if(mt){ mt.innerHTML=''; mt.style.display='none'; }
+    const ps=byId('periodSelector'); if(ps){ ps.style.display='none'; ps.classList.remove('open'); }
     byId('importPanel')&&byId('importPanel').classList.remove('visible');
     byId('addPanel')&&byId('addPanel').classList.remove('visible');
     ['importBtn','addBtn','exportBtn'].forEach(id=>byId(id)&&(byId(id).style.display='none'));
@@ -706,9 +734,10 @@
       // 1) Legacy blob table (old decentralized cloud copy). RLS may limit
       //    this to the rows you are allowed to read (usually your own).
       if(legacyTable){
-        const { data, error } = await supabaseClient.from(legacyTable).select('*');
-        if(error){ console.warn('Legacy table read skipped:', error.message); }
-        else if(Array.isArray(data)){
+        let data=null;
+        try{ data = await fetchAllRows(legacyTable,'*'); }
+        catch(error){ console.warn('Legacy table read skipped:', error.message); }
+        if(Array.isArray(data)){
           data.sort((a,b)=> new Date(a.updated_at||a.created_at||0) - new Date(b.updated_at||b.created_at||0)); // newest overwrites
           data.forEach(row=>{
             const app = row.app_data || row.data || row.payload || null;

@@ -31,7 +31,22 @@
 
 <div class="app" id="dashboardApp">
   <div class="header">
-    <div class="header-left"><h1>VAT Compliance Purchase Dashboard</h1></div>
+    <div class="header-left"><h1>VAT Compliance Purchase Dashboard</h1>
+      <div class="period-selector" id="periodSelector">
+        <button class="period-btn" id="periodBtn" type="button" onclick="togglePeriodPicker(event)" aria-expanded="false" aria-controls="periodPopover" title="Select year and month">
+          <svg class="period-cal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="period-label" id="periodLabel">All Months</span>
+          <svg class="period-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="period-popover" id="periodPopover" role="dialog" aria-label="Select reporting period">
+          <div class="period-pop-head">Reporting period</div>
+          <div class="period-years" id="periodYears"></div>
+          <div class="period-months-head" id="periodMonthsHead">Months</div>
+          <div class="period-months" id="periodMonths"></div>
+          <div class="period-legend"><span class="period-legend-item"><span class="period-swatch has"></span>Has records</span><span class="period-legend-item"><span class="period-swatch none"></span>No records</span></div>
+        </div>
+      </div>
+    </div>
     <div class="header-right"><div class="cloud-widget" id="cloudWidget">
       <button class="cloud-trigger" id="cloudTrigger" type="button" onclick="toggleCloudPopover(event)" aria-expanded="false" aria-controls="cloudPopover" title="Cloud database status"><span class="cloud-dot warn" id="cloudDot"></span><span>Cloud</span></button>
       <div class="cloud-popover" id="cloudPopover">
@@ -216,6 +231,12 @@
 <div class="cv-review-modal summary-review-modal" id="summaryReviewModal" aria-hidden="true">
   <div class="cv-review-dialog" role="dialog" aria-modal="true" aria-labelledby="summaryReviewTitle">
     <div id="summaryReviewModalContent"></div>
+  </div>
+</div>
+<div class="cv-review-modal upload-summary-modal" id="uploadSummaryModal" aria-hidden="true">
+  <div class="cv-review-dialog upload-summary-dialog" role="dialog" aria-modal="true" aria-labelledby="uploadSummaryTitle">
+    <div class="upload-summary-head"><h3 id="uploadSummaryTitle">Upload summary</h3><button class="btn" type="button" onclick="closeUploadSummary()">Close</button></div>
+    <div id="uploadSummaryBody"></div>
   </div>
 </div>
 <div class="toast" id="toast"></div>

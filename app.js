@@ -194,25 +194,72 @@ function buildYearBuckets(){
 }
 function monthsForActiveYear(){const months=buildMonthBuckets();return activeYear==='all'?months:months.filter(m=>(yearOfKey(m.key)||'undated')===activeYear)}
 function setYear(year){activeYear=year;activeMonth='all';focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel')?.classList.remove('visible');document.getElementById('addPanel')?.classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
-function setMonth(key){if(key!=='all'){const ym=yearOfKey(key);if(ym)activeYear=ym}activeMonth=key;focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel')?.classList.remove('visible');document.getElementById('addPanel')?.classList.remove('visible');closeSummaryReviewModal(true);renderAll()}
+function setMonth(key){if(key!=='all'){const ym=yearOfKey(key);if(ym)activeYear=ym}activeMonth=key;focusedCV=null;activeSummaryReview=null;openSummary.clear();openCVs.clear();document.getElementById('importPanel')?.classList.remove('visible');document.getElementById('addPanel')?.classList.remove('visible');closeSummaryReviewModal(true);if(typeof closePeriodPicker==='function')closePeriodPicker();renderAll()}
+// Calendar period selector (single calendar icon beside the page title, opening a
+// compact year/month picker). Replaces the old row of month tabs. Months that
+// have records are shown in an active colour; months without records are muted;
+// the selected month is highlighted. Works for every time-based module because
+// it drives the same activeYear/activeMonth scope used across the dashboard.
+function togglePeriodPicker(event){
+  if(event)event.stopPropagation();
+  const sel=document.getElementById('periodSelector');if(!sel)return;
+  const open=sel.classList.toggle('open');
+  const btn=document.getElementById('periodBtn');if(btn)btn.setAttribute('aria-expanded',open?'true':'false');
+}
+function closePeriodPicker(){
+  const sel=document.getElementById('periodSelector');if(!sel)return;
+  sel.classList.remove('open');
+  const btn=document.getElementById('periodBtn');if(btn)btn.setAttribute('aria-expanded','false');
+}
+document.addEventListener('click',event=>{const sel=document.getElementById('periodSelector');if(sel&&!sel.contains(event.target))closePeriodPicker()});
 function renderMonthTabs(){
-  const el=document.getElementById('monthTabs');if(!el)return;
-  if(activeTab==='masters'){el.innerHTML='';el.style.display='none';return}
-  el.style.display='flex';
+  // The old #monthTabs strip is retired; keep the element hidden for compatibility.
+  const legacy=document.getElementById('monthTabs');if(legacy){legacy.innerHTML='';legacy.style.display='none'}
+  const sel=document.getElementById('periodSelector');if(!sel)return;
+  // Master Data and Audit are not date-scoped: hide the period selector there.
+  if(activeTab==='masters'){sel.style.display='none';closePeriodPicker();return}
+  sel.style.display='';
   const years=buildYearBuckets();
   if(!new Set(['all',...years.map(y=>y.year)]).has(activeYear))activeYear='all';
   // Keep the selected month consistent with the selected year.
   if(activeMonth!=='all'){const ym=yearOfKey(activeMonth);if(ym&&activeYear!=='all'&&ym!==activeYear)activeMonth='all'}
-  if(activeMonth==='all'&&!new Set(['all',...buildMonthBuckets().map(m=>m.key)]).has(activeMonth)){/* all is always valid */}
-  // Row 1: fiscal years
-  let yearHtml=`<button class="year-btn ${activeYear==='all'?'active':''}" onclick="setYear('all')">All Years <span>${transactions.length}</span></button>`;
-  years.forEach(y=>{yearHtml+=`<button class="year-btn ${activeYear===y.year?'active':''}" onclick="setYear('${attr(y.year)}')">${esc(y.year==='undated'?'Undated':y.year)} <span>${yearCount(y.year)}</span></button>`});
-  // Row 2: months within the selected year (or all months across years)
-  const months=monthsForActiveYear();
-  const firstLabel=activeYear==='all'?`All Months <span>${transactions.length} txns</span>`:`Full Year ${esc(activeYear==='undated'?'Undated':activeYear)} <span>${yearCount(activeYear)} txns</span>`;
-  let monthHtml=`<button class="month-btn ${activeMonth==='all'?'active':''}" onclick="setMonth('all')">${firstLabel}</button>`;
-  months.forEach(m=>{monthHtml+=`<button class="month-btn ${activeMonth===m.key?'active':''}" onclick="setMonth('${attr(m.key)}')">${esc(m.label)} <span>${monthCount(m.key)} txns</span></button>`});
-  el.innerHTML=`<div class="year-row">${yearHtml}</div><div class="month-row">${monthHtml}</div>`;
+  // Year chips (All Years + each fiscal year present + Undated if any).
+  const yearsEl=document.getElementById('periodYears');
+  if(yearsEl){
+    let yearHtml=`<button class="period-year ${activeYear==='all'?'active':''}" type="button" onclick="setYear('all')">All Years <span>${transactions.length}</span></button>`;
+    years.forEach(y=>{yearHtml+=`<button class="period-year ${activeYear===y.year?'active':''}" type="button" onclick="setYear('${attr(y.year)}')">${esc(y.year==='undated'?'Undated':y.year)} <span>${yearCount(y.year)}</span></button>`});
+    yearsEl.innerHTML=yearHtml;
+  }
+  // Month grid for the selected year. When a specific calendar year is active we
+  // show all 12 months Jan–Dec so empty months are clearly visible (muted);
+  // otherwise we list the distinct month buckets that actually exist.
+  const headEl=document.getElementById('periodMonthsHead');
+  const monthsEl=document.getElementById('periodMonths');
+  if(monthsEl){
+    let monthHtml='';
+    const isCalendarYear=/^\d{4}$/.test(activeYear);
+    if(isCalendarYear){
+      if(headEl)headEl.textContent=`Months in ${activeYear}`;
+      monthHtml+=`<button class="period-month full ${activeMonth==='all'?'selected':''}" type="button" onclick="setMonth('all')">Full Year<span>${yearCount(activeYear)}</span></button>`;
+      for(let m=1;m<=12;m++){
+        const key=`${activeYear}-${String(m).padStart(2,'0')}`;
+        const count=monthCount(key);
+        const cls=['period-month'];
+        if(count>0)cls.push('has');else cls.push('none');
+        if(activeMonth===key)cls.push('selected');
+        monthHtml+=`<button class="${cls.join(' ')}" type="button" onclick="setMonth('${attr(key)}')">${esc(MONTH_NAMES[m-1][0])}<span>${count}</span></button>`;
+      }
+    }else{
+      if(headEl)headEl.textContent=activeYear==='all'?'All months':'Undated';
+      const months=monthsForActiveYear();
+      const firstLabel=activeYear==='all'?`All Months<span>${transactions.length}</span>`:`All Undated<span>${yearCount(activeYear)}</span>`;
+      monthHtml+=`<button class="period-month full ${activeMonth==='all'?'selected':''}" type="button" onclick="setMonth('all')">${firstLabel}</button>`;
+      months.forEach(m=>{const count=monthCount(m.key);monthHtml+=`<button class="period-month ${count>0?'has':'none'} ${activeMonth===m.key?'selected':''}" type="button" onclick="setMonth('${attr(m.key)}')">${esc(m.label)}<span>${count}</span></button>`});
+    }
+    monthsEl.innerHTML=monthHtml;
+  }
+  // Trigger button label reflects the current scope.
+  const labelEl=document.getElementById('periodLabel');if(labelEl)labelEl.textContent=activeMonthLabel();
 }
 function badge(type,label){return `<span class="badge badge-${type}">${esc(label)}</span>`}
 function vatBadge(type){return type==='VAT-reg'?badge('ok','VAT Registered'):badge('na','Not VAT Registered')}
@@ -475,6 +522,68 @@ function downloadImportIssueReport(){
   downloadXLSX(rows,'xlsx_import_issue_report.xlsx','Import Issues');
 }
 function strictRateIssue(value){const raw=String(value??'').trim();if(!raw)return 'missing';return parseRate(raw)===null?'invalid':''}
+/* ============================================================================
+ * Upload duplicate handling.
+ *
+ *  - EXACT duplicate  : every relevant business field matches a record that is
+ *                       already saved -> skipped (never added twice).
+ *  - NEAR duplicate   : looks like an existing record (same CV, date, amount,
+ *                       supplier, accounting title) but at least one other
+ *                       detail differs -> NOT skipped; added and flagged so the
+ *                       user can review. We never delete, overwrite, or silently
+ *                       drop a near-duplicate.
+ *  - NEW              : neither matches -> added normally.
+ *
+ * Review metadata (status, notes, _id) is excluded from the fingerprint so
+ * re-uploading a row that was already verified is still recognised as a copy.
+ * ========================================================================== */
+function dupMoney(v){return Math.round((Number(v)||0)*100)/100}
+function dupNorm(v){return String(v??'').trim().toLowerCase()}
+function importDupFingerprint(type,r){
+  if(type==='book')return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'vn',dupNorm(r.voucherName),'sp',dupNorm(r.supplier),'tin',dupNorm(r.tin),'inv',dupNorm(r.inv),'ds',dupNorm(r.description),'at',dupNorm(r.accountingTitle),'ba',dupNorm(r.bankAccount),'vc',dupNorm(r.vatCategory),'atc',dupNorm(r.atcCode),'am',dupMoney(transactionAmount(r)),'vt',dupMoney(r.vat),'tt',dupMoney(r.total)].join('|');
+  // VAT / EWT ledger rows
+  return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'sp',dupNorm(r.supplier),'ac',dupNorm(r.account),'rf',dupNorm(r.ref),'am',dupMoney(r.amount)].join('|');
+}
+function importDupLooseKey(type,r){
+  if(type==='book')return ['cv',dupNorm(r.cv),'dt',dupNorm(r.date),'sp',dupNorm(r.supplier),'at',dupNorm(r.accountingTitle),'am',dupMoney(transactionAmount(r))].join('|');
+  return ['cv',dupNorm(r.cv),'am',dupMoney(r.amount)].join('|');
+}
+// Classify freshly-built import records against the records already saved.
+// Returns kept rows (new + near-duplicates, both added) plus counts.
+function classifyImportDuplicates(type,built,existing){
+  const exactSet=new Set();
+  const looseSet=new Set();
+  (existing||[]).forEach(r=>{exactSet.add(importDupFingerprint(type,r));looseSet.add(importDupLooseKey(type,r))});
+  const kept=[],nearReview=[];let exactDup=0,nearDup=0;
+  built.forEach(r=>{
+    const fp=importDupFingerprint(type,r);
+    if(exactSet.has(fp)){exactDup++;return;}            // perfect copy -> skip
+    const loose=importDupLooseKey(type,r);
+    const isNear=looseSet.has(loose);                   // similar but not identical
+    kept.push(r);                                       // never auto-skip a near-duplicate
+    exactSet.add(fp);looseSet.add(loose);               // dedupe within the same file too
+    if(isNear){nearDup++;nearReview.push(r)}
+  });
+  return {kept,nearReview,exactDup,nearDup};
+}
+function showUploadSummary(stats){
+  const modal=document.getElementById('uploadSummaryModal');
+  const body=document.getElementById('uploadSummaryBody');
+  if(!modal||!body)return;
+  const reviewNote=stats.nearDup>0?`<div class="upload-summary-review">${stats.nearDup} near-duplicate row(s) were added but look similar to existing records. They were <strong>not</strong> skipped or overwritten — please review them in ${importHtmlEscape(stats.label)}.</div>`:'';
+  body.innerHTML=`
+    <div class="upload-summary-grid">
+      <div class="upload-stat"><div class="upload-stat-num">${stats.totalRows}</div><div class="upload-stat-label">Total rows in file</div></div>
+      <div class="upload-stat ok"><div class="upload-stat-num">${stats.added}</div><div class="upload-stat-label">New added</div></div>
+      <div class="upload-stat muted"><div class="upload-stat-num">${stats.exactDup}</div><div class="upload-stat-label">Existing skipped</div></div>
+      <div class="upload-stat warn"><div class="upload-stat-num">${stats.nearDup}</div><div class="upload-stat-label">Need review</div></div>
+      <div class="upload-stat err"><div class="upload-stat-num">${stats.errors}</div><div class="upload-stat-label">Rows with errors</div></div>
+    </div>
+    <div class="upload-summary-meta">${importHtmlEscape(stats.label)}${stats.fileName?' · '+importHtmlEscape(stats.fileName):''}</div>
+    ${reviewNote}`;
+  modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
+}
+function closeUploadSummary(){const m=document.getElementById('uploadSummaryModal');if(m){m.classList.remove('visible');m.setAttribute('aria-hidden','true')}}
 function importRows(rows,type,fileInput,fileName){
   if(rows.length<2){showToast('XLSX must have a header row and data.');return}
   clearImportIssueReport();
@@ -566,17 +675,33 @@ function importRows(rows,type,fileInput,fileName){
       built.push(normalizeSupplier({tin,registeredName:pick(row,'registered_name','corporation_name','supplier_name'),lastName:pick(row,'registered_last_name','last_name'),firstName:pick(row,'registered_first_name','first_name'),middleName:pick(row,'registered_middle_name','middle_name'),address:pick(row,'registered_address','address'),city:pick(row,'city'),zip:pick(row,'zip_code','zip')}));added++;return;
     }
   });
-  if(type==='book'){if(replace)transactions=[];transactions=transactions.concat(built)}
-  else if(type==='vatLedger'){if(replace)vatLedger=[];vatLedger=vatLedger.concat(built)}
-  else if(type==='ewtLedger'){if(replace)ewtLedger=[];ewtLedger=ewtLedger.concat(built)}
+  // Duplicate-aware merge for the transaction-style modules. Exact copies are
+  // skipped; near-duplicates are added and flagged for review; masters keep their
+  // existing dedupe-by-key behaviour. "Replace" still wipes-then-adds on request.
+  const errors=skipped;        // rows dropped by validation = errors
+  let exactDup=0,nearDup=0,newAdded=added;
+  if(type==='book'||type==='vatLedger'||type==='ewtLedger'){
+    const isLedger=type!=='book';
+    const existingArr = replace ? [] : (type==='book'?transactions.map(normalizeTransaction):(type==='vatLedger'?vatLedger:ewtLedger));
+    const cls=classifyImportDuplicates(type,built,existingArr);
+    if(type==='book'){if(replace)transactions=[];transactions=transactions.concat(cls.kept)}
+    else if(type==='vatLedger'){if(replace)vatLedger=[];vatLedger=vatLedger.concat(cls.kept)}
+    else{if(replace)ewtLedger=[];ewtLedger=ewtLedger.concat(cls.kept)}
+    exactDup=cls.exactDup;nearDup=cls.nearDup;newAdded=cls.kept.length-cls.nearDup;
+  }
   else if(type==='vatCategoryMaster'){if(replace)VAT_CATEGORIES=[];VAT_CATEGORIES=VAT_CATEGORIES.concat(built);dedupeVatCategories()}
   else if(type==='atcMaster'){if(replace)atcMaster=[];atcMaster=atcMaster.concat(built);dedupeAtcMaster()}
   else{if(replace)supplierMaster=[];supplierMaster=supplierMaster.concat(built);dedupeSupplierMaster()}
   saveAll();renderAll();
-  showToast(`${added} rows imported${skipped?`; ${skipped} skipped with issue report`:''}.`);
-  if(issues.length){showImportIssueReport(issues,added,type,fileName);document.getElementById('importPanel').classList.add('visible')}
+  if(issues.length){showImportIssueReport(issues,newAdded+nearDup,type,fileName);document.getElementById('importPanel').classList.add('visible')}
   else{document.getElementById('importPanel').classList.remove('visible')}
   if(fileInput)fileInput.value='';
+  if(type==='book'||type==='vatLedger'||type==='ewtLedger'){
+    showUploadSummary({totalRows:rows.length-1,added:newAdded,exactDup,nearDup,errors,label:importIssueLabel(type),fileName});
+    showToast(`Upload complete: ${newAdded} new, ${exactDup} duplicate(s) skipped, ${nearDup} for review${errors?`, ${errors} error(s)`:''}.`);
+  }else{
+    showToast(`${added} rows imported${skipped?`; ${skipped} skipped with issue report`:''}.`);
+  }
 }
 function templateSpec(type){if(type==='book')return{name:'purchase_transactions_voucher_template.xlsx',sheet:'Purchase Transactions',rows:[['voucher_name','cv_no','date','description','accounting_title','bank_account','tin','invoice_no','amount','total_amount','vat_category','atc_code','compliance','review_note'],['Sample Voucher','CV-0001','01/05/2026','Office supplies','Office Supplies Expense','BDO Checking 1234','123-456-789-000','SI-0001',10000,11200,'S','WC 160','Compliant','Invoice verified'],['Petty Cash Voucher','CV-PCF-001','01/08/2026','Petty cash taxi reimbursement','Transportation Expense','BPI Petty Cash','','',500,500,'SNQ','WI 160','Without Invoice','Needs supplier verification']]};if(type==='vatLedger')return{name:'vat_balances_template.xlsx',sheet:'VAT Balances',rows:[['cv_no','voucher_name','date','vat_amount','ledger_account'],['CV-0001','Sample Voucher','Jan 5',1200,'Input VAT']]};if(type==='ewtLedger')return{name:'ewt_balances_template.xlsx',sheet:'EWT Balances',rows:[['cv_no','voucher_name','date','ewt_amount','ledger_account'],['CV-0001','Sample Voucher','Jan 5',200,'EWT Payable']]};if(type==='vatCategoryMaster')return{name:'vat_categories_template.xlsx',sheet:'VAT Categories',rows:[['vat_category','description','vat_type','rate'],['S','Vatable services','VAT Registered',12],['SNQ','Non-VAT services','Not VAT Registered',0]]};if(type==='atcMaster')return{name:'atc_master_template.xlsx',sheet:'ATC Master',rows:[['atc_code','rate','description','source'],['WC 160',2,'Sample ATC description','2307 reference table'],['WI 160',2,'Service payment - individual','2307 reference table']]};return{name:'supplier_master_template.xlsx',sheet:'Supplier Master',rows:[['tin','registered_name','registered_last_name','registered_first_name','registered_middle_name','registered_address','city','zip_code'],['123-456-789-000','Supplier A Corporation','','','','100 Ayala Avenue','Makati City','1226'],['456-789-012-000','','Dela Cruz','Juan','Santos','45 Mabini Street','Manila','1000']]}}
 function downloadTemplate(){const spec=templateSpec(document.getElementById('importType').value);downloadXLSX(spec.rows,spec.name,spec.sheet)}
