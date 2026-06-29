@@ -148,8 +148,9 @@ function computeAmounts(raw){
   const vatable=taxableBaseFromAmount(amount,vatCategory);
   const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
   const vat=computeVATFromCategory(vatable,vatCategory);
-  let total=parseMoney(raw.total??raw.totalAmount??raw.total_amount??raw.gross??raw.gross_amount);
-  if(total===0) total=amount+vat;
+  // Total Amount is always Amount + VAT, for both imported and manual transactions.
+  // (EWT is computed/displayed separately and never reduces the Total.)
+  const total=amount+vat;
   return{amount,vatable,nonVatable,vat,total,vatCategory}
 }
 function normalizeTIN(value){return String(value??'').replace(/[^0-9]/g,'')}
@@ -275,14 +276,22 @@ function addTransaction(){
   ['f_voucher','f_tin','f_cv','f_inv','f_date','f_desc','f_accounting_title','f_bank_account','f_amount'].forEach(id=>setValue(id,''));
   setValue('f_vat_category','');setValue('f_atc_code','');
   activeTab='working';
-  activeMonth='all';
+  // Scope the view to the new transaction's fiscal year/month so it is clearly visible,
+  // clear filters that could hide it, then focus its CV so the user stays exactly where
+  // the new record landed (its CV opens for review) instead of jumping to the top.
+  const monthKey=monthInfoFromDate(newRow.date).key;
+  if(/^\d{4}-\d{2}$/.test(monthKey)){activeYear=monthKey.slice(0,4);activeMonth=monthKey;}else{activeYear='all';activeMonth='all';}
   if(document.getElementById('workSearch'))document.getElementById('workSearch').value='';
   if(document.getElementById('workStatus'))document.getElementById('workStatus').value='';
   if(document.getElementById('varianceFilter'))document.getElementById('varianceFilter').value='';
-  openCVs.add(newRow.cv||'(No CV Number)');
+  const newCv=newRow.cv||'(No CV Number)';
+  openCVs.add(newCv);
+  focusedCV=newCv;                       // highlights the CV row and opens it for verification
+  document.getElementById('addPanel').classList.remove('visible'); // avoid overlapping the review popup
   saveAll();renderAll();
-  document.getElementById('addPanel').classList.add('visible');
-  showToast('Purchase transaction added. It is now visible under All Months and the CV is expanded.');
+  // Bring the new CV's row into view as a clear confirmation of where it landed.
+  setTimeout(()=>{const row=document.querySelector('#workTbody tr.active-cv');if(row&&row.scrollIntoView)row.scrollIntoView({block:'center',behavior:'smooth'});},60);
+  showToast(`Transaction added to CV ${newCv} (${activeMonthLabel()}). Opened for review.`);
 }
 function addFiveTestTransactions(){
   const baseDate=new Date();
@@ -1116,6 +1125,16 @@ function renderCVReviewModal(){
   if(activeTab!=='working'||!focusedCV){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
   const g=buildCVGroups().find(item=>item.cv===focusedCV);
   if(!g){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true');content.innerHTML='';return;}
+  // STABILITY: if the popup is already open on this same CV and the user is actively
+  // editing a field inside it, skip the innerHTML rebuild. This prevents the popup
+  // from stuttering or closing when a background autosave / cloud sync re-renders.
+  // Live field values are updated in place by the field handlers, so no rebuild is
+  // needed mid-edit; the popup rebuilds normally once focus leaves it.
+  const existingInner=content.querySelector('.review-workspace');
+  if(focusId&&existingInner&&existingInner.getAttribute('data-cv')===String(g.cv)){
+    modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
+    return;
+  }
   const cvTotal=g.txns.reduce((a,t)=>a+t.total,0);
   modal.classList.add('visible');
   modal.setAttribute('aria-hidden','false');
@@ -1263,7 +1282,7 @@ function workingDetailTable(g){
         <div class="compact-grid">
           <div class="compact-field"><label>Amount</label><input class="money-input wp-autosave" data-id="${attr(t._id)}" id="wp_amount_${attr(t._id)}" value="${attr(money(transactionAmount(t)))}"/></div>
           <div class="compact-field"><label>Computed VAT</label><input class="${vatInputClass}" id="wp_vat_${attr(t._id)}" value="${attr(money(t.vat))}" readonly/></div>
-          <div class="compact-field"><label>Total</label><input class="money-input wp-autosave" data-id="${attr(t._id)}" id="wp_total_${attr(t._id)}" value="${attr(money(t.total))}"/></div>
+          <div class="compact-field"><label>Total (Amount + VAT)</label><input class="money-input" id="wp_total_${attr(t._id)}" value="${attr(money(transactionAmount(t)+Number(t.vat||0)))}" readonly/></div>
           <div class="compact-field"><label>Computed EWT</label><input class="${(ewtInputClass+(ewtRateMismatch(t)?' ledger-alert-input':''))}" id="wp_ewt_${attr(t._id)}" value="${attr(money(t.ewtAmount))}" readonly/></div>
         </div>
       </div>
@@ -1311,8 +1330,8 @@ function updateWorkingTaxPreview(id){
   const ewt=expectedEwtAmount({amount,atcCode});
   setValue('wp_vat_'+id,money(vat));
   setValue('wp_ewt_'+id,money(ewt));
-  const totalEl=document.getElementById('wp_total_'+id);
-  if(totalEl&&String(totalEl.value||'').trim()==='')setValue('wp_total_'+id,money(amount+vat));
+  // Total is always Amount + VAT (EWT is shown/computed separately and never reduces Total).
+  setValue('wp_total_'+id,money(amount+vat));
 }
 function saveWorkingRow(id,opts={}){
   const silent=!!opts.silent;
@@ -1344,8 +1363,8 @@ function saveWorkingRow(id,opts={}){
   const vatable=taxableBaseFromAmount(amount,vatCategory);
   const nonVatable=nonTaxableBaseFromAmount(amount,vatCategory);
   const vat=computeVATFromCategory(vatable,vatCategory);
-  let total=getMoneyOrFallback('wp_total_'+id,existing.total);
-  if(!total)total=amount+vat;
+  // Total Amount = Amount + VAT (same logic for imported and manual lines). EWT stays separate.
+  const total=amount+vat;
   const master=findSupplierByTIN(tin);
   const base={...existing,supplier,tin,inv,description:existing.description,accountingTitle:existing.accountingTitle,bankAccount:existing.bankAccount,amount,vatable,nonVatable,vatCategory,vat,total,ewtAmount:expectedEwtAmount({amount,atcCode}),atcCode,manualStatus:status,reviewNote:getValueOrFallback('wp_note_'+id,existing.reviewNote),lastReviewed:new Date().toISOString(),address:getValueOrFallback('wp_address_'+id,existing.address),city:getValueOrFallback('wp_city_'+id,existing.city),zip:getValueOrFallback('wp_zip_'+id,existing.zip),supplierManualOverride:manualOverride};
   transactions[index]=(master&&!manualOverride)?applySupplierToTransaction(base,master):normalizeTransaction(base);
