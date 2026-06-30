@@ -262,10 +262,16 @@
     }
   }
 
-  /* ---------- initial load of the shared dataset ---------- */
-  async function loadAllCentral(){
+  /* ---------- initial + ongoing load of the shared (central) dataset ----------
+   * This pulls the ONE shared dataset for every entity. It is the single global
+   * source of truth: after it runs, the local arrays mirror the central tables
+   * exactly. Used on login, on manual Load, by realtime, and by the periodic
+   * background refresh. Returns true if anything actually changed so the quiet
+   * background poll only re-renders when there is something new. */
+  async function loadAllCentral(opts={}){
     cloudApplying=true;
     try{
+      let changed=false;
       for(const e of ENTITIES){
         // Page through the FULL table (works around the 1,000-row request cap).
         const data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at');
@@ -275,12 +281,43 @@
           arr.push(rec); snap.set(r.record_id,stableStringify(rec));
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
         });
+        const prev=snapshots[e.key];
+        if(!changed){
+          if(!prev||prev.size!==snap.size) changed=true;
+          else { for(const [id,json] of snap){ if(prev.get(id)!==json){ changed=true; break; } } }
+        }
         e.set(arr); snapshots[e.key]=snap;
       }
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
-      rerender();
+      if(changed || !opts.quiet) rerender();   // quiet polls only repaint on real change
+      return changed;
     }finally{ cloudApplying=false; }
   }
+
+  /* ---------- background refresh: guarantee a single global source of truth ----------
+   * Realtime (postgres_changes) is the fast path, but it requires Realtime to be
+   * enabled on the tables in the Supabase project. To make centralization robust
+   * regardless of that setting, every signed-in client also pulls the shared
+   * dataset on a short interval and whenever the tab regains focus. This converges
+   * all users onto the same data even if realtime events are missed. It never
+   * disrupts an in-progress edit or a pending local save. */
+  let refreshTimer=null;
+  const BACKGROUND_REFRESH_MS=15000;
+  function userIsEditingField(){
+    const el=document.activeElement; if(!el) return false;
+    const tag=(el.tagName||'').toUpperCase();
+    return tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA';
+  }
+  async function backgroundRefresh(){
+    if(!supabaseClient || !cloudUser) return;
+    if(cloudBusy || cloudApplying) return;   // a write/apply is already running
+    if(syncTimer) return;                    // a local change is queued to push first
+    if(document.hidden) return;              // tab not visible
+    if(userIsEditingField()) return;         // don't yank data while the user types
+    try{ await loadAllCentral({quiet:true}); }catch(err){ /* transient; next tick retries */ }
+  }
+  function startBackgroundRefresh(){ stopBackgroundRefresh(); refreshTimer=setInterval(backgroundRefresh,BACKGROUND_REFRESH_MS); }
+  function stopBackgroundRefresh(){ if(refreshTimer){ clearInterval(refreshTimer); refreshTimer=null; } }
 
   // First user ever: lift their existing localStorage data into the shared cloud.
   async function seedFromLocal(localArrays){
@@ -600,6 +637,7 @@
       try{ await seedFromLocal(before); }catch(err){ console.error('Seed failed:',err); showErrorBox('Could not upload local data: '+err.message); }
     }
     subscribeRealtime();
+    startBackgroundRefresh();   // safety net so all users converge even without realtime
     setCloudStatus('Shared cloud is up to date.','ok', lastCloudSave?('Last change saved: '+lastCloudSave):'Connected to shared cloud');
   }
 
@@ -655,6 +693,7 @@
           else { setAuthView(true); }
         }else{
           unsubscribeRealtime();
+          stopBackgroundRefresh();
           setAuthView(false);
           setCloudStatus('Not logged in. Please log in to open the dashboard.','err','No active session');
         }
@@ -702,6 +741,7 @@
     try{
       clearTimeout(syncTimer);
       unsubscribeRealtime();
+      stopBackgroundRefresh();
       if(supabaseClient) await supabaseClient.auth.signOut();
       cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false;
       const p=byId('authPassword'); if(p) p.value='';
@@ -786,6 +826,10 @@
   function closeCloudPopover(){ const w=byId('cloudWidget'); if(w) w.classList.remove('open'); const t=byId('cloudTrigger'); if(t) t.setAttribute('aria-expanded','false'); }
   function handleLoginKey(event){ if(event.key==='Enter') logIn(); }
   document.addEventListener('click',event=>{ const w=byId('cloudWidget'); if(w&&!w.contains(event.target)) closeCloudPopover(); });
+  // Pull the latest shared data the moment the user returns to the tab/window,
+  // so they never look at stale data after switching away.
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) backgroundRefresh(); });
+  window.addEventListener('focus',()=>backgroundRefresh());
 
   /* ---------- exports ---------- */
   window.signUp=signUp; window.logIn=logIn; window.logOut=logOut;
