@@ -65,6 +65,7 @@
   let cloudBusy = false;       // true while a sync write is in flight
   let rerunQueued = false;
   let syncTimer = null;
+  let deferredSync = false;     // a save was requested while applying; run it right after
   let pendingContext = {};      // optional action label for the next sync (e.g. Upload)
 
   const snapshots = {};          // entityKey -> Map(record_id -> stable JSON)
@@ -195,11 +196,15 @@
 
   /* ---------- push local changes to the shared database ---------- */
   function queueSync(){
-    if(cloudApplying) return;
+    // Don't drop a save just because a refresh is mid-flight: remember it and run
+    // it the instant applying finishes (otherwise a fresh upload could be lost).
+    if(cloudApplying){ deferredSync=true; return; }
     if(!supabaseClient || !cloudUser) return; // offline: app.js localStorage still holds the work
     clearTimeout(syncTimer);
     syncTimer=setTimeout(()=>runSync(false),400);
   }
+  // Run any save that was requested while we were applying remote data.
+  function flushDeferredSync(){ if(deferredSync){ deferredSync=false; queueSync(); } }
 
   async function runSync(manual){
     clearTimeout(syncTimer); syncTimer=null;
@@ -259,6 +264,7 @@
     }finally{
       cloudBusy=false;
       if(rerunQueued){ rerunQueued=false; queueSync(); }
+      flushDeferredSync();
     }
   }
 
@@ -270,8 +276,8 @@
    * background poll only re-renders when there is something new. */
   async function loadAllCentral(opts={}){
     cloudApplying=true;
+    let changed=false, pendingLocal=0;
     try{
-      let changed=false;
       for(const e of ENTITIES){
         // Page through the FULL table (works around the 1,000-row request cap).
         const data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at');
@@ -282,6 +288,17 @@
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
         });
         const prev=snapshots[e.key];
+        // PRESERVE locally-created records that have not been pushed yet, so a
+        // refresh can never wipe a brand-new upload before it syncs. A record is
+        // a pending local insert when it is NOT in the cloud now AND was never in
+        // the cloud before (if it WAS in a prior snapshot, its absence means it
+        // was deleted remotely, so we correctly let it go).
+        (e.get()||[]).forEach(r=>{
+          const id=r&&r._id; if(!id) return;
+          if(snap.has(id)) return;
+          if(prev && prev.has(id)) return;
+          arr.push(r); pendingLocal++;
+        });
         if(!changed){
           if(!prev||prev.size!==snap.size) changed=true;
           else { for(const [id,json] of snap){ if(prev.get(id)!==json){ changed=true; break; } } }
@@ -289,9 +306,12 @@
         e.set(arr); snapshots[e.key]=snap;
       }
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
-      if(changed || !opts.quiet) rerender();   // quiet polls only repaint on real change
-      return changed;
+      if(changed || pendingLocal || !opts.quiet) rerender();
     }finally{ cloudApplying=false; }
+    // Push any preserved local inserts (and any save deferred during applying).
+    if(pendingLocal>0) deferredSync=true;
+    flushDeferredSync();
+    return changed;
   }
 
   /* ---------- background refresh: guarantee a single global source of truth ----------
@@ -346,6 +366,7 @@
       cloudApplying=true;
       try{ if(originalSaveAll) originalSaveAll(); rerender(); }
       finally{ cloudApplying=false; }
+      flushDeferredSync();
     },120);
   }
 
