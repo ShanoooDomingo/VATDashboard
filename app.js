@@ -86,7 +86,7 @@ function dateSortNumber(value){
   return null;
 }
 function loadArray(key,fallback){try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(err){}return fallback}
-function saveAll(){try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES))}catch(err){}}
+function saveAll(){invalidateVisibleCache();try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES))}catch(err){}}
 function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';if(['journal','journal entry','journal-entry','journal_entry','je'].includes(v))return 'journal';if(['adjusting','adjusting entry','adjusting-entry','adjusting_entry','adjustment','aje'].includes(v))return 'adjusting';return 'unreviewed'}
 function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';if(status==='journal')return 'Journal Entry';if(status==='adjusting')return 'Adjusting Entry';return 'Unreviewed'}
 // Journal Entry and Adjusting Entry are intentional postings that do not require
@@ -191,9 +191,26 @@ function recordMatchesActiveMonth(row){
   if(activeYear!=='all')return yearOfKey(key)===activeYear;
   return true;
 }
-function visibleTransactionsForMonth(){return transactions.map(normalizeTransaction).filter(recordMatchesActiveMonth)}
-function visibleVatLedgerForMonth(){return vatLedger.map(r=>normalizeLedger(r,'vat')).filter(recordMatchesActiveMonth)}
-function visibleEwtLedgerForMonth(){return ewtLedger.map(r=>normalizeLedger(r,'ewt')).filter(recordMatchesActiveMonth)}
+// PERF: visibleTransactionsForMonth / *LedgerForMonth are called many times per
+// render (buildCVGroups alone runs on several tabs, and renderWorking calls the set
+// three times). Each call re-normalizes the whole array — which is deliberate, so
+// VAT/EWT stay in sync with the current master rates — but it only needs to happen
+// ONCE per render, not 10+ times. We memo the normalized+filtered result, keyed by a
+// data version that is bumped whenever data is saved (saveAll) or a fresh render
+// pass starts (renderAll), plus the active year/month scope. Every render therefore
+// still recomputes fresh against live master data; it just stops repeating the work
+// within a single pass. The normalization logic itself is unchanged.
+let dataVersion=0;
+function invalidateVisibleCache(){dataVersion++;}
+let _visCache={ver:-1,scope:'',tx:null,vat:null,ewt:null};
+function _ensureVisCache(){
+  const scope=activeYear+'|'+activeMonth;
+  if(_visCache.ver!==dataVersion||_visCache.scope!==scope)_visCache={ver:dataVersion,scope,tx:null,vat:null,ewt:null};
+  return _visCache;
+}
+function visibleTransactionsForMonth(){const c=_ensureVisCache();if(!c.tx)c.tx=transactions.map(normalizeTransaction).filter(recordMatchesActiveMonth);return c.tx}
+function visibleVatLedgerForMonth(){const c=_ensureVisCache();if(!c.vat)c.vat=vatLedger.map(r=>normalizeLedger(r,'vat')).filter(recordMatchesActiveMonth);return c.vat}
+function visibleEwtLedgerForMonth(){const c=_ensureVisCache();if(!c.ewt)c.ewt=ewtLedger.map(r=>normalizeLedger(r,'ewt')).filter(recordMatchesActiveMonth);return c.ewt}
 function buildMonthBuckets(){const map=new Map();const add=row=>{const info=monthInfoFromDate(row?.date);if(!map.has(info.key))map.set(info.key,info)};transactions.forEach(add);vatLedger.forEach(add);ewtLedger.forEach(add);return[...map.values()].sort((a,b)=>a.order-b.order||a.label.localeCompare(b.label))}
 function monthCount(key){if(key==='all')return transactions.length;return transactions.filter(t=>recordMonthKey(t)===key).length}
 function yearCount(year){if(year==='all')return transactions.length;return transactions.filter(t=>yearOfKey(recordMonthKey(t))===year).length}
@@ -1739,7 +1756,28 @@ function exportAtcMasterXLSX(){const rows=[['ATC Code','EWT Rate','Description',
 
 function exportSupplierXLSX(){const rows=[['TIN','Registered Name','Registered Last Name','Registered First Name','Registered Middle Name','Registered Address','City','ZIP Code']];supplierMaster.map(normalizeSupplier).forEach(s=>rows.push([s.tin,s.registeredName,s.lastName,s.firstName,s.middleName,s.address,s.city,s.zip]));downloadXLSX(rows,'supplier_master_export.xlsx','Supplier Master');showToast('Supplier Master export downloaded.')}
 function safeDashboardRender(fnName){try{if(typeof window[fnName]==='function')window[fnName]()}catch(err){console.error('Render failed:',fnName,err);if(fnName==='renderBirCompliance')renderBirFallback(err)}}
-function renderAll(){['renderMonthTabs','renderSummary','renderWorking','renderVatBalances','renderEwtBalances','renderBirCompliance','renderVatCategories','renderAtcMaster','renderSuppliers'].forEach(safeDashboardRender);try{populateAddAtcDropdown()}catch(err){console.error('Render failed: populateAddAtcDropdown',err)}try{updateActionButtons()}catch(err){console.error('Render failed: updateActionButtons',err)}}
+// PERF: only render the tab the user is actually looking at. The previous version
+// rebuilt all six tabs' DOM (Summary, Working, VAT, EWT, BIR, Masters) on every
+// single change — even hidden ones — which was the main source of lag. switchTab()
+// calls renderAll(), so the target tab is always rebuilt fresh the moment it is
+// shown. Always-on pieces (the period/month tabs, the Add-panel ATC dropdown, and
+// the toolbar buttons) still render every pass. No render logic is changed; only
+// how many run per pass.
+const TAB_RENDERERS={
+  summary:['renderSummary'],
+  working:['renderWorking'],
+  vat:['renderVatBalances'],
+  ewt:['renderEwtBalances'],
+  bir:['renderBirCompliance'],
+  masters:['renderVatCategories','renderAtcMaster','renderSuppliers'],
+};
+function renderAll(){
+  invalidateVisibleCache();
+  safeDashboardRender('renderMonthTabs');
+  (TAB_RENDERERS[activeTab]||[]).forEach(safeDashboardRender);
+  try{populateAddAtcDropdown()}catch(err){console.error('Render failed: populateAddAtcDropdown',err)}
+  try{updateActionButtons()}catch(err){console.error('Render failed: updateActionButtons',err)}
+}
 
 
 function slpExcelPeriodEndDate(){
