@@ -1480,7 +1480,16 @@ function saveLineDescription(id){
 function verificationStatusClass(status){const s=parseVerification(status);return 'status-'+(['ok','warn','err','journal','adjusting'].includes(s)?s:'unreviewed')}
 // Recolor the whole Verification Status box/card to match the selected status.
 // The dropdown itself stays neutral/readable; no separate badge is used.
-function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const box=document.getElementById('wp_vsection_'+id);if(!box)return;const s=parseVerification(el.value);box.classList.remove('status-ok','status-warn','status-err','status-unreviewed','status-journal','status-adjusting');box.classList.add(verificationStatusClass(s));}
+// Replace whatever status-* class a node currently carries with `cls`. Generic on
+// purpose: it strips ANY class beginning with "status-", so a future Verification
+// Status flows through without listing it here.
+function swapStatusClass(node,cls){if(!node)return;[...node.classList].forEach(c=>{if(c.indexOf('status-')===0)node.classList.remove(c);});if(cls)node.classList.add(cls);}
+function applyVerificationStatusClass(el){if(!el)return;const id=el.dataset?.id;if(!id)return;const cls=verificationStatusClass(parseVerification(el.value));
+  // Recolor the Verification section box AND the transaction card's left accent bar
+  // so the status color is visible at a glance across many lines in a CV.
+  swapStatusClass(document.getElementById('wp_vsection_'+id),cls);
+  swapStatusClass(el.closest('.verification-card'),cls);
+}
 // Journal Entry / Adjusting Entry are non-taxable accounting entries, so VAT Category
 // and ATC Code do not apply. When one of those statuses is selected we clear both
 // fields, disable them (greyed out), and show a helper note. Switching back to a
@@ -1583,7 +1592,7 @@ function workingDetailTable(g){
   const cards=orderedGroupTransactions(g.txns).map(t=>{
     const reviewReasons=transactionReviewReasons(t);
     const reviewTitle=reviewTitleFromReasons(reviewReasons);
-    return `<div class="verification-card${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
+    return `<div class="verification-card ${verificationStatusClass(t.manualStatus)}${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
     <div class="verification-card-head">
       <div><div class="field-label">Description</div><div class="desc-edit-wrap" id="descWrap_${attr(t._id)}"><span class="readonly-desc" id="descView_${attr(t._id)}">${esc(t.description||'--')}</span><button type="button" class="btn btn-small desc-inline-edit-btn" id="descEditBtn_${attr(t._id)}" onclick="editLineDescription('${attr(t._id)}')">Edit</button><span class="desc-edit-form" id="descForm_${attr(t._id)}" style="display:none"><input type="text" class="edit-input desc-edit-input" id="descInput_${attr(t._id)}" value="${attr(t.description)}" placeholder="Description" aria-label="Description"/><button type="button" class="btn btn-small btn-primary" onclick="saveLineDescription('${attr(t._id)}')">Save</button><button type="button" class="btn btn-small" onclick="cancelLineDescription('${attr(t._id)}')">Cancel</button></span></div><div class="line-meta line-meta-grid"><span>Accounting Title: ${esc(t.accountingTitle||'--')}</span><span>Bank Account: ${esc(t.bankAccount||'--')}</span></div></div>
       <div class="action-buttons verification-actions-right"><button class="btn btn-small btn-danger wp-remove" data-id="${attr(t._id)}">Remove</button></div>

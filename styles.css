@@ -1040,3 +1040,15 @@ table.audit-table td{vertical-align:top}
 /* Journal / Adjusting entries: VAT Category and ATC Code are non-applicable and locked */
 .compact-field select.field-locked,.compact-field select.wp-vatcat:disabled,.compact-field select.wp-atc:disabled{background:#f3f2ed!important;color:var(--text3)!important;cursor:not-allowed;opacity:.65}
 .exempt-entry-note{font-size:9.5px;color:var(--warn);line-height:1.35;margin-top:2px}
+/* Left accent bar on each transaction card follows the Verification Status color.
+   The palette lives in one place (--status-accent per status); the bar binds to it
+   generically via [class*="status-"], so any future status inherits its accent with
+   no extra card/JS changes. Only the bar color changes (width/style are preserved). */
+.cv-review-dialog .verification-card{transition:border-left-color .2s ease!important;}
+.cv-review-dialog .verification-card.status-ok{--status-accent:#22c55e;}
+.cv-review-dialog .verification-card.status-warn{--status-accent:#f59e0b;}
+.cv-review-dialog .verification-card.status-err{--status-accent:#ef4444;}
+.cv-review-dialog .verification-card.status-unreviewed{--status-accent:#94a3b8;}
+.cv-review-dialog .verification-card.status-journal{--status-accent:#2563eb;}
+.cv-review-dialog .verification-card.status-adjusting{--status-accent:#db2777;}
+.cv-review-dialog .verification-card[class*="status-"]{border-left-color:var(--status-accent,#2563eb)!important;}
