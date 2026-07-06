@@ -160,7 +160,18 @@ function supplierDisplayName(s){return String(s?.registeredName||'').trim()||per
 function normalizeSupplier(row){return{_id:row?._id||makeId('sup'),tin:formatTIN(row?.tin||row?.supplier_tin||row?.tin_no||row?.tax_identification_number),registeredName:String(row?.registeredName??row?.registered_name??row?.corporation_name??row?.registered_corporation_name??row?.company_name??row?.supplier_name??'').trim(),lastName:String(row?.lastName??row?.last_name??row?.registered_last_name??'').trim(),firstName:String(row?.firstName??row?.first_name??row?.registered_first_name??'').trim(),middleName:String(row?.middleName??row?.middle_name??row?.registered_middle_name??'').trim(),address:String(row?.address??row?.registeredAddress??row?.registered_address??row?.street_address??'').trim(),city:String(row?.city??row?.registered_city??'').trim(),zip:String(row?.zip??row?.zip_code??row?.registered_zip_code??row?.postal_code??'').trim()}}
 function findSupplierByTIN(tin){const needle=normalizeTIN(tin);if(!needle)return null;return supplierMaster.map(normalizeSupplier).find(s=>normalizeTIN(s.tin)===needle)||null}
 function applySupplierToTransaction(tx,s){if(!s)return tx;return normalizeTransaction({...tx,tin:s.tin,supplier:supplierDisplayName(s),registeredName:s.registeredName,lastName:s.lastName,firstName:s.firstName,middleName:s.middleName,address:s.address,city:s.city,zip:s.zip})}
-function normalizeTransaction(t){const a=computeAmounts(t||{});const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=expectedEwtAmount({amount:a.amount,atcCode});return{_id:t?._id||makeId('tx'),voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus:parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status),reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
+// Stable per-transaction import sequence. It is preserved when already present on a
+// record (so it survives localStorage saves and cloud sync/pull, which do not return
+// rows in a guaranteed order) and only assigned — monotonically increasing so new
+// lines append to the end — when a record has never carried one. This is what keeps
+// a CV popup opening its lines in the same order every time, on every device.
+let txnSeqCounter=0;
+function nextTransactionSeq(t){
+  const raw=Number(t?._seq??t?.seq??t?.line_no??t?.line_number??t?.import_seq??t?.sequence);
+  if(Number.isFinite(raw)){if(raw>txnSeqCounter)txnSeqCounter=raw;return raw;}
+  return ++txnSeqCounter;
+}
+function normalizeTransaction(t){const a=computeAmounts(t||{});const _seq=nextTransactionSeq(t);const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=expectedEwtAmount({amount:a.amount,atcCode});return{_id:t?._id||makeId('tx'),_seq,voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus:parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status),reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
 function normalizeLedger(row,type){return{_id:row?._id||makeId(type==='vat'?'vat':'ewt'),cv:String(row?.cv||row?.cv_no||row?.cv_number||'').trim(),supplier:String(row?.supplier||row?.supplier_name||row?.payee||row?.voucherName||row?.voucher_name||'').trim(),date:String(row?.date||row?.transaction_date||'').trim()||'--',description:String(row?.description??row?.desc??row?.memo??row?.particulars??row?.nature??'').trim(),amount:parseMoney(row?.amount??row?.balance??row?.ending_balance??(type==='vat'?row?.vat_amount??row?.input_vat:row?.ewt_amount??row?.withholding_tax)),account:String(row?.account||row?.ledger_account||'').trim(),ref:String(row?.ref||row?.reference||row?.gl_ref||'').trim(),type}}
 let VAT_CATEGORIES=loadArray(VAT_CATEGORIES_KEY,demoVatCategories).map(normalizeVatCategoryMaster);
 let atcMaster=loadArray(ATC_MASTER_KEY,demoAtcMaster).map(normalizeAtcMaster);
@@ -1231,26 +1242,21 @@ function sortWorkingGroups(groups){
     return cmp*dir;
   });
 }
-function workSortValueForTxn(t,key){
-  switch(key){
-    case 'date':return parseWorkSortDate(t.date);
-    case 'voucher':return t.voucherName||'';
-    case 'vat':return Number(t.vat)||0;
-    case 'ewt':return Number(t.ewtAmount)||0;
-    case 'total':return Number(t.total)||0;
-    case 'verification':return statusSortRank(t.manualStatus);
-    case 'balance':return 0;
-    case 'cv':default:return t.cv||'';
-  }
-}
-function sortWorkingTransactions(txns){
-  const key=workSort?.key||'date';
-  const type=workSortType(key);
-  const dir=workSort?.dir==='desc'?-1:1;
+// Order the transaction lines shown inside a CV verification popup. Lines always
+// follow their stable import sequence (_seq) so the same CV group opens in the same
+// order every time — across refreshes, autosaves, cloud sync/pull, sessions, and
+// devices. This is deliberately independent of the working-table column sort
+// (workSort), which only reorders the CV groups in the summary list, never the
+// lines within a group. Records are never reordered unless the user explicitly
+// changes them.
+function orderedGroupTransactions(txns){
   return [...(txns||[])].sort((a,b)=>{
-    let cmp=compareTypedValues(workSortValueForTxn(a,key),workSortValueForTxn(b,key),type);
-    if(!cmp)cmp=compareTypedValues(parseWorkSortDate(a.date),parseWorkSortDate(b.date),'date')||naturalCompareText(a.cv,b.cv)||naturalCompareText(a.voucherName,b.voucherName);
-    return cmp*dir;
+    const sa=Number(a?._seq),sb=Number(b?._seq);
+    const fa=Number.isFinite(sa),fb=Number.isFinite(sb);
+    if(fa&&fb){if(sa!==sb)return sa-sb;}
+    else if(fa)return -1;
+    else if(fb)return 1;
+    return 0; // fall back to the existing (import) order
   });
 }
 function setWorkSort(key){
@@ -1537,7 +1543,7 @@ function workingDetailTable(g){
   if(!g.txns.length)return '<div class="empty-state" style="padding:16px">No purchase transaction rows for this CV.</div>';
   const vatInputClass=isBalanced(g.vatDiff)?'money-input':'money-input ledger-alert-input';
   const ewtInputClass=isBalanced(g.ewtDiff)?'money-input':'money-input ledger-alert-input';
-  const cards=sortWorkingTransactions(g.txns).map(t=>{
+  const cards=orderedGroupTransactions(g.txns).map(t=>{
     const reviewReasons=transactionReviewReasons(t);
     const reviewTitle=reviewTitleFromReasons(reviewReasons);
     return `<div class="verification-card${reviewReasons.length?' review-needed-card':''}"${reviewTitle?` title="${attr(reviewTitle)}"`:''}>
