@@ -1037,3 +1037,6 @@ table.audit-table td{vertical-align:top}
 .field-invalid{border-color:var(--err-border)!important;background:var(--err-bg)!important;box-shadow:inset 0 0 0 1px var(--err-border)!important}
 .bir-field-validation{margin:8px 0 0;padding:10px 12px;border:1px solid var(--err-border);border-left:4px solid var(--err);border-radius:12px;background:var(--err-bg);color:#7f1d1d;font-size:12px;line-height:1.5}
 .bir-field-validation strong{color:#7f1d1d}
+/* Journal / Adjusting entries: VAT Category and ATC Code are non-applicable and locked */
+.compact-field select.field-locked,.compact-field select.wp-vatcat:disabled,.compact-field select.wp-atc:disabled{background:#f3f2ed!important;color:var(--text3)!important;cursor:not-allowed;opacity:.65}
+.exempt-entry-note{font-size:9.5px;color:var(--warn);line-height:1.35;margin-top:2px}
