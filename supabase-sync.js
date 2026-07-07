@@ -42,15 +42,73 @@
   /* ---------- the six shared data tables ----------
    * get()/set() reach the live globals declared in app.js; norm() reuses
    * the app's own normalizers so stored records keep their exact shape. */
+  // dedupe policy per entity (see identityKey / reconcile below):
+  //   'hard'    = reliable natural key (TIN / ATC code / VAT code / balance tuple):
+  //               collapse duplicates to a deterministic survivor AND clean the extra
+  //               copies out of the shared cloud.
+  //   'prevent' = transactions: block new content-duplicates from ever being pushed,
+  //               but never auto-delete a cloud row (two lines can be legitimately
+  //               identical, so removing one could lose real data).
   const ENTITIES = [
-    { key:'transactions',   table:TBL.transactions,    module:'Purchase Transactions', get:()=>transactions,   set:v=>{transactions=v},   norm:r=>normalizeTransaction(r) },
-    { key:'vatLedger',      table:TBL.vatLedger,       module:'VAT Balances',          get:()=>vatLedger,      set:v=>{vatLedger=v},      norm:r=>normalizeLedger(r,'vat') },
-    { key:'ewtLedger',      table:TBL.ewtLedger,       module:'EWT Balances',          get:()=>ewtLedger,      set:v=>{ewtLedger=v},      norm:r=>normalizeLedger(r,'ewt') },
-    { key:'supplierMaster', table:TBL.supplierMaster,  module:'Supplier Master',       get:()=>supplierMaster, set:v=>{supplierMaster=v}, norm:r=>normalizeSupplier(r) },
-    { key:'atcMaster',      table:TBL.atcMaster,       module:'ATC Master',            get:()=>atcMaster,      set:v=>{atcMaster=v},      norm:r=>normalizeAtcMaster(r) },
-    { key:'VAT_CATEGORIES', table:TBL.vatCategories,   module:'VAT Categories',        get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) }
+    { key:'transactions',   table:TBL.transactions,    module:'Purchase Transactions', dedupe:'prevent', get:()=>transactions,   set:v=>{transactions=v},   norm:r=>normalizeTransaction(r) },
+    { key:'vatLedger',      table:TBL.vatLedger,       module:'VAT Balances',          dedupe:'hard',    get:()=>vatLedger,      set:v=>{vatLedger=v},      norm:r=>normalizeLedger(r,'vat') },
+    { key:'ewtLedger',      table:TBL.ewtLedger,       module:'EWT Balances',          dedupe:'hard',    get:()=>ewtLedger,      set:v=>{ewtLedger=v},      norm:r=>normalizeLedger(r,'ewt') },
+    { key:'supplierMaster', table:TBL.supplierMaster,  module:'Supplier Master',       dedupe:'hard',    get:()=>supplierMaster, set:v=>{supplierMaster=v}, norm:r=>normalizeSupplier(r) },
+    { key:'atcMaster',      table:TBL.atcMaster,       module:'ATC Master',            dedupe:'hard',    get:()=>atcMaster,      set:v=>{atcMaster=v},      norm:r=>normalizeAtcMaster(r) },
+    { key:'VAT_CATEGORIES', table:TBL.vatCategories,   module:'VAT Categories',        dedupe:'hard',    get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) }
   ];
   const ENTITY_BY_KEY = Object.fromEntries(ENTITIES.map(e=>[e.key,e]));
+
+  /* ---------- deterministic record identity (root-cause fix for cross-device dupes) ----------
+   * A record's cloud key is its persistent record_id (_id). But the SAME logical record
+   * created independently on two devices — a re-import, or the built-in demo Supplier /
+   * VAT Category rows, which are seeded with a fresh random _id on every browser — gets a
+   * different _id each time, so record_id-only dedup cannot tell they are the same record.
+   * We derive a STABLE CONTENT key so those are recognised as one record and never stored,
+   * pushed, or kept twice. The key is deterministic (identical on every device) so all
+   * clients independently agree on the same survivor and converge without a delete war. */
+  function idParts(){ return JSON.stringify([].slice.call(arguments).map(v=>String(v==null?'':v).trim().toLowerCase())); }
+  function nTIN(v){ return (typeof normalizeTIN==='function')?normalizeTIN(v):String(v==null?'':v).replace(/[^0-9]/g,''); }
+  function nATC(v){ return (typeof normalizeATC==='function')?normalizeATC(v):String(v==null?'':v).trim().toUpperCase(); }
+  function identityKey(entityKey, r){
+    if(!r) return '';
+    switch(entityKey){
+      case 'supplierMaster':{ const t=nTIN(r.tin); return t?('tin:'+t):('sup:'+idParts(r.registeredName,r.lastName,r.firstName)); }
+      case 'atcMaster':{ const c=nATC(r.atcCode); return c?('atc:'+c):''; }
+      case 'VAT_CATEGORIES':{ const c=String(r.code||'').trim().toUpperCase(); return c?('vcat:'+c):''; }
+      case 'vatLedger':
+      case 'ewtLedger': return 'led:'+idParts(entityKey, r.cv, r.date, r.account, r.ref, r.description, r.amount);
+      case 'transactions': return 'tx:'+idParts(r.cv, r.voucherName, r.date, r.inv, r.description, r.tin, r.amount, r.vat, r.ewtAmount, r.atcCode, r.vatCategory, r.accountingTitle, r.bankAccount);
+      default: return '';
+    }
+  }
+  // When two records share an identity, the record_id that sorts lowest is the survivor.
+  function canonicalPick(a,b){ return String(a)<=String(b)?a:b; }
+  // Collapse an array to one record per identity, keeping the deterministic survivor.
+  // Returns the deduped array; if `dropped` is passed it receives the losing records.
+  function dedupeByIdentity(entityKey, rows, dropped){
+    const first=new Map();
+    (rows||[]).forEach(rec=>{
+      const k=identityKey(entityKey,rec)||('id:'+(rec&&rec._id));
+      const ex=first.get(k);
+      if(!ex){ first.set(k,rec); return; }
+      const survivor=canonicalPick(ex._id,rec._id);
+      const loser=(survivor===ex._id)?rec:ex;
+      if(survivor!==ex._id) first.set(k,rec);
+      if(dropped) dropped.push(loser);
+    });
+    return [...first.values()];
+  }
+  // Collapse in-memory 'hard' entities so a re-import in the SAME session never pushes a
+  // duplicate (losers already synced become deletes on the next diff; unsynced ones just go).
+  function collapseLocalHardDuplicates(){
+    ENTITIES.forEach(e=>{
+      if(e.dedupe!=='hard') return;
+      const cur=e.get()||[]; if(cur.length<2) return;
+      const deduped=dedupeByIdentity(e.key,cur);
+      if(deduped.length!==cur.length) e.set(deduped);
+    });
+  }
 
   /* ---------- state ---------- */
   let supabaseClient = null;
@@ -277,27 +335,40 @@
   async function loadAllCentral(opts={}){
     cloudApplying=true;
     let changed=false, pendingLocal=0;
+    const dupeDeletes={};   // table -> [record_id,...] redundant cloud copies to remove ('hard' only)
     try{
       for(const e of ENTITIES){
         // Page through the FULL table (works around the 1,000-row request cap).
         const data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at');
-        const arr=[]; const snap=new Map();
-        (data||[]).forEach(r=>{
+        let rows=(data||[]).map(r=>{
           const rec=e.norm(r.data); rec._id=r.record_id;
-          arr.push(rec); snap.set(r.record_id,stableStringify(rec));
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
+          return rec;
         });
+        // 'hard' entities: collapse any pre-existing cloud duplicates (same content under
+        // different record_ids, e.g. suppliers/VAT categories re-seeded on many devices) to
+        // one deterministic survivor, and remember the losers so we can clean the cloud.
+        if(e.dedupe==='hard'){
+          const dropped=[];
+          rows=dedupeByIdentity(e.key,rows,dropped);
+          dropped.forEach(r=>{ if(r&&r._id)(dupeDeletes[e.table]||(dupeDeletes[e.table]=[])).push(r._id); });
+        }
+        const arr=[]; const snap=new Map(); const identities=new Set();
+        rows.forEach(rec=>{ arr.push(rec); snap.set(rec._id,stableStringify(rec)); identities.add(identityKey(e.key,rec)||('id:'+rec._id)); });
         const prev=snapshots[e.key];
-        // PRESERVE locally-created records that have not been pushed yet, so a
-        // refresh can never wipe a brand-new upload before it syncs. A record is
-        // a pending local insert when it is NOT in the cloud now AND was never in
-        // the cloud before (if it WAS in a prior snapshot, its absence means it
-        // was deleted remotely, so we correctly let it go).
+        // PRESERVE locally-created records that have not been pushed yet, so a refresh can
+        // never wipe a brand-new upload before it syncs. A record is a pending local insert
+        // only when it is NOT already in the cloud by record_id AND NOT already there by
+        // CONTENT identity (this is the key fix: a re-import or the demo masters no longer
+        // create a second copy) AND was never in a prior cloud snapshot (if it WAS, its
+        // absence means it was deleted remotely, so we correctly let it go).
         (e.get()||[]).forEach(r=>{
           const id=r&&r._id; if(!id) return;
           if(snap.has(id)) return;
+          const key=identityKey(e.key,r)||('id:'+id);
+          if(identities.has(key)) return;
           if(prev && prev.has(id)) return;
-          arr.push(r); pendingLocal++;
+          arr.push(r); identities.add(key); pendingLocal++;
         });
         if(!changed){
           if(!prev||prev.size!==snap.size) changed=true;
@@ -306,8 +377,17 @@
         e.set(arr); snapshots[e.key]=snap;
       }
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
-      if(changed || pendingLocal || !opts.quiet) rerender();
+      if(changed || pendingLocal || Object.keys(dupeDeletes).length || !opts.quiet) rerender();
     }finally{ cloudApplying=false; }
+    // Clean redundant cloud duplicates. Safe & idempotent: a deterministic survivor of the
+    // same identity is always retained, so no device ever deletes the last copy, and once
+    // the cloud is clean this loop finds nothing. Best-effort — a failure just retries next load.
+    for(const table in dupeDeletes){
+      const ids=[...new Set(dupeDeletes[table])];
+      if(!ids.length) continue;
+      try{ await supabaseClient.from(table).delete().in('record_id',ids); }
+      catch(err){ console.warn('Duplicate cleanup skipped for',table,err&&err.message); }
+    }
     // Push any preserved local inserts (and any save deferred during applying).
     if(pendingLocal>0) deferredSync=true;
     flushDeferredSync();
@@ -343,7 +423,8 @@
   async function seedFromLocal(localArrays){
     const now=new Date().toISOString(); const name=currentUserName();
     for(const e of ENTITIES){
-      const rows=(localArrays[e.key]||[]).filter(r=>r&&r._id);
+      let rows=(localArrays[e.key]||[]).filter(r=>r&&r._id);
+      if(e.dedupe==='hard') rows=dedupeByIdentity(e.key,rows); // don't seed duplicate masters/balances
       if(!rows.length) continue;
       const up=rows.map(r=>({ record_id:r._id, data:r, last_modified_by:cloudUser.id, last_modified_by_name:name, last_modified_at:now }));
       const audits=rows.map(r=>({ user_id:cloudUser.id, user_name:name, action_type:'Sync', module:e.module, record_id:r._id, old_value:null, new_value:r, ip_address:clientIp }));
@@ -610,6 +691,9 @@
     // saveAll: keep original localStorage behavior, then push the diff to the cloud.
     originalSaveAll = (typeof window.saveAll==='function') ? window.saveAll : originalSaveAll;
     window.saveAll = function(){
+      // Collapse any in-session duplicate masters/balances (e.g. a re-import of the same
+      // file) BEFORE persisting/pushing, so we never send a duplicate to the shared cloud.
+      if(!cloudApplying){ try{ collapseLocalHardDuplicates(); }catch(err){ console.warn('Local dedupe skipped:',err&&err.message); } }
       if(originalSaveAll) originalSaveAll.apply(this,arguments);
       if(cloudApplying) return;
       queueSync();
@@ -644,22 +728,29 @@
   function showToastSafe(m){ if(typeof window.showToast==='function') window.showToast(m); }
 
   /* ---------- auth actions (same buttons as before) ---------- */
+  let afterLoginBusy=false;
   async function afterLogin(){
-    setAuthView(true);
-    setCloudStatus('Connecting to shared cloud...','busy','Loading workspace');
-    await fetchIp();
-    await loadProfile();
-    const before={}; let hadLocal=false;
-    ENTITIES.forEach(e=>{ const a=(e.get()||[]).slice(); before[e.key]=a; if(a.length) hadLocal=true; });
-    await loadAllCentral();
-    const centralEmpty=ENTITIES.every(e=>(e.get()||[]).length===0);
-    if(centralEmpty && hadLocal){
-      setCloudStatus('Uploading your existing data to the shared cloud...','busy','First-time setup');
-      try{ await seedFromLocal(before); }catch(err){ console.error('Seed failed:',err); showErrorBox('Could not upload local data: '+err.message); }
-    }
-    subscribeRealtime();
-    startBackgroundRefresh();   // safety net so all users converge even without realtime
-    setCloudStatus('Shared cloud is up to date.','ok', lastCloudSave?('Last change saved: '+lastCloudSave):'Connected to shared cloud');
+    // Guard against overlapping startups (initSupabase's initial call + an auth-state
+    // event, or a fast re-login) so the initial download and seed never run twice at once.
+    if(afterLoginBusy) return;
+    afterLoginBusy=true;
+    try{
+      setAuthView(true);
+      setCloudStatus('Connecting to shared cloud...','busy','Loading workspace');
+      await fetchIp();
+      await loadProfile();
+      const before={}; let hadLocal=false;
+      ENTITIES.forEach(e=>{ const a=(e.get()||[]).slice(); before[e.key]=a; if(a.length) hadLocal=true; });
+      await loadAllCentral();   // initial download completes BEFORE realtime subscribes (below)
+      const centralEmpty=ENTITIES.every(e=>(e.get()||[]).length===0);
+      if(centralEmpty && hadLocal){
+        setCloudStatus('Uploading your existing data to the shared cloud...','busy','First-time setup');
+        try{ await seedFromLocal(before); }catch(err){ console.error('Seed failed:',err); showErrorBox('Could not upload local data: '+err.message); }
+      }
+      subscribeRealtime();
+      startBackgroundRefresh();   // safety net so all users converge even without realtime
+      setCloudStatus('Shared cloud is up to date.','ok', lastCloudSave?('Last change saved: '+lastCloudSave):'Connected to shared cloud');
+    }finally{ afterLoginBusy=false; }
   }
 
   /* ---------- load the Supabase browser library ---------- */
