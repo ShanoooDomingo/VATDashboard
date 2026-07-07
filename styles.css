@@ -1052,3 +1052,35 @@ table.audit-table td{vertical-align:top}
 .cv-review-dialog .verification-card.status-journal{--status-accent:#2563eb;}
 .cv-review-dialog .verification-card.status-adjusting{--status-accent:#db2777;}
 .cv-review-dialog .verification-card[class*="status-"]{border-left-color:var(--status-accent,#2563eb)!important;}
+/* --- Part 1: Compliance Summary cards share the Purchase Transactions status accent --- */
+/* Both popups live under .cv-review-dialog, so the existing status-* accent-bar rules
+   apply automatically once the summary card carries its verificationStatusClass. Just
+   match the 5px accent width and give the read-only exempt note room. The old fixed
+   purple accent is superseded by the higher-specificity status rule. */
+.summary-review-modal .summary-popup-card{border-left-width:5px!important;}
+.summary-review-modal .summary-exempt-note{margin:2px 10px 10px;}
+
+/* --- Part 2: Cloud popover must render above ALL dashboard content and modals --- */
+/* Root cause: .header-right used backdrop-filter, which creates a stacking context that
+   trapped the position:fixed popover behind other layers no matter how high its z-index.
+   Remove the filter (keep the translucent pill) so the fixed popover escapes to the
+   viewport layer, and pin it above the modal layer (modals are z-index:1600). */
+.header-right{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+.cloud-popover{z-index:3000!important;}
+/* --- Parts 3 & 4: editable ledger rows + multi-transaction CV accordion --- */
+.ledger-cv-row.clickable-row{cursor:pointer}
+.ledger-cv-row.clickable-row:hover td{background:rgba(37,99,235,.04)}
+.ledger-cv-toggle{display:inline-flex;align-items:center;gap:6px}
+.ledger-cv-toggle .chevron{color:var(--accent,#2a4dd0)}
+.ledger-count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:var(--accent-light,#eef1fd);color:var(--accent,#2a4dd0);font-size:10px;font-weight:800;line-height:1}
+.ledger-detail-row.hidden,.ledger-edit-row.hidden{display:none}
+.ledger-detail-row>td{background:#fbfcfe}
+.ledger-detail-row.editing>td{background:#eff6ff}
+.ledger-actions-cell{white-space:nowrap}
+.ledger-actions-cell .btn{padding:3px 8px}
+.ledger-edit-form{padding:11px 13px;background:#f8fbff;border-left:3px solid var(--accent,#2a4dd0);border-radius:0 8px 8px 0}
+.ledger-edit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px}
+.ledger-edit-grid .compact-field label{display:block;font-size:9px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+.ledger-edit-grid .edit-input{width:100%!important}
+.ledger-edit-actions{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
+@media(max-width:760px){.ledger-edit-grid{grid-template-columns:1fr}}

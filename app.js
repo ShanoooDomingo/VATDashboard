@@ -1017,7 +1017,7 @@ function summaryReviewCards(txns,mode='voucher'){
           <div class="verification-section-title">Supplier</div>
           <div class="compact-grid">${supplierFields.join('')}</div>
         </div>`:'';
-    return `<div class="verification-card summary-popup-card ${supplierFields.length?'':'no-supplier'}">
+    return `<div class="verification-card summary-popup-card ${verificationStatusClass(t.manualStatus)} ${supplierFields.length?'':'no-supplier'}">
       <div class="verification-card-head summary-thin-head">
         <div class="summary-desc-wrap"><div class="field-label">Description</div><div class="readonly-desc">${esc(t.description||'--')}</div></div>
         <div class="action-buttons verification-actions-right"><span class="autosave-status">Read-only summary</span></div>
@@ -1045,6 +1045,7 @@ function summaryReviewCards(txns,mode='voucher'){
           </div>
         </div>
       </div>
+      ${isExemptEntry(t)?`<div class="exempt-entry-note summary-exempt-note">VAT Category and ATC Code are not applicable for Journal Entries and Adjusting Entries.</div>`:''}
     </div>`;
   }).join('');
   return `<div class="verification-card-list summary-thin-card-list">${cards}</div>`;
@@ -1743,7 +1744,86 @@ function saveWorkingRow(id,opts={}){
 }
 function removeTransaction(id){transactions=transactions.filter(t=>t._id!==id);saveAll();renderAll();showToast('Transaction removed.')}
 function ledgerRowsByCV(type){const rows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();const groups=buildCVGroups();const byCv=new Map(groups.map(g=>[g.cv,g]));const search=(document.getElementById(type+'Search')?.value||'').toLowerCase();const filter=(document.getElementById(type+'BalanceFilter')?.value||'');const map=new Map();rows.forEach(r=>{const cv=r.cv||'(No CV Number)';if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const g=map.get(cv);g.rows.push(r);g.ledgerAmount+=r.amount});byCv.forEach((g,cv)=>{if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const item=map.get(cv);item.purchaseAmount=type==='vat'?g.bookVat:g.bookEwt;item.diff=item.purchaseAmount-item.ledgerAmount});let result=[...map.values()];result.forEach(item=>{item.diff=item.purchaseAmount-item.ledgerAmount;item.suppliers=compactList(item.rows.map(r=>r.supplier).concat((byCv.get(item.cv)?.txns||[]).map(t=>t.voucherName||t.supplier)));item.status=isBalanced(item.diff)?'balanced':'unbalanced'});if(search)result=result.filter(item=>String(item.cv).toLowerCase().includes(search)||String(item.suppliers).toLowerCase().includes(search)||item.rows.some(r=>ledgerSearchMatch(r,search)));if(filter)result=result.filter(item=>item.status===filter);return result.sort((a,b)=>String(a.cv).localeCompare(String(b.cv)))}
-function renderLedgerSheet(type){const rows=ledgerRowsByCV(type);const allRows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();const tx=visibleTransactionsForMonth();const purchaseTotal=tx.reduce((a,t)=>a+(type==='vat'?t.vat:t.ewtAmount),0);const ledgerTotal=allRows.reduce((a,r)=>a+r.amount,0);const diff=purchaseTotal-ledgerTotal;const prefix=type==='vat'?'vat':'ewt';document.getElementById(prefix+'Metrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${rows.length}</div><div class="metric-sub">${allRows.length} uploaded balance rows</div></div><div class="metric"><div class="metric-label">Purchase ${type.toUpperCase()}</div><div class="metric-value" style="font-size:16px">${peso(purchaseTotal)}</div><div class="metric-sub">from Purchase Transactions</div></div><div class="metric"><div class="metric-label">${type.toUpperCase()} Balance</div><div class="metric-value" style="font-size:16px">${peso(ledgerTotal)}</div><div class="metric-sub">from Online Book ledger upload</div></div><div class="metric ${isBalanced(diff)?'ok':'err'}"><div class="metric-label">Difference</div><div class="metric-value" style="font-size:16px">${peso(diff)}</div><div class="metric-sub">vs uploaded ledger balance</div></div><div class="metric err"><div class="metric-label">Not Balanced</div><div class="metric-value">${rows.filter(r=>!isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div><div class="metric ok"><div class="metric-label">Balanced</div><div class="metric-value">${rows.filter(r=>isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div>`;document.getElementById(prefix+'Thead').innerHTML=`<tr><th style="width:12%">CV Number</th><th style="width:17%">Supplier / voucher</th><th style="width:18%">Description</th><th class="num" style="width:11%">Purchase ${type.toUpperCase()}</th><th class="num" style="width:11%">Uploaded Balance</th><th class="num" style="width:11%">Difference</th><th style="width:9%">Status</th><th style="width:6%">Ledger rows</th><th style="width:11%">References</th></tr>`;const tbody=document.getElementById(prefix+'Tbody'),tfoot=document.getElementById(prefix+'Tfoot');tbody.innerHTML='';if(!rows.length){tbody.innerHTML='<tr><td colspan="9"><div class="empty-state">No balance rows match your filters.</div></td></tr>';tfoot.innerHTML='';return}rows.forEach(item=>{const refs=compactList(item.rows.map(r=>r.ref), '--');const descs=compactList(item.rows.map(r=>r.description), '--');const tr=document.createElement('tr');tr.innerHTML=`<td class="mono">${esc(item.cv)}</td><td>${esc(item.suppliers)}</td><td class="ledger-desc-cell">${esc(descs)}</td><td class="num">${peso(item.purchaseAmount)}</td><td class="num">${peso(item.ledgerAmount)}</td><td class="num">${varianceBadge(item.diff)}</td><td>${item.status==='balanced'?badge('ok','Balanced'):badge('err','Not balanced')}</td><td>${item.rows.length}</td><td class="mono">${esc(refs)}</td>`;tbody.appendChild(tr);item.rows.forEach(r=>{const detail=document.createElement('tr');detail.innerHTML=`<td></td><td>${esc(r.supplier||'--')}</td><td class="ledger-desc-cell">${esc(r.description||'--')}</td><td></td><td class="num">${peso(r.amount)}</td><td></td><td></td><td>${esc(r.account||'--')}</td><td class="mono">${esc(r.ref||'--')}</td>`;tbody.appendChild(detail)})});tfoot.innerHTML=`<tr><td colspan="3">Grand total</td><td class="num">${peso(purchaseTotal)}</td><td class="num">${peso(ledgerTotal)}</td><td class="num">${varianceBadge(diff)}</td><td colspan="3"></td></tr>`}
+// ---- Ledger transaction management (VAT / EWT Balances) ----
+// Expansion state per ledger type; persists across renders so an open CV stays open.
+let openVatCVs=new Set(), openEwtCVs=new Set();
+function ledgerOpenSet(type){return type==='vat'?openVatCVs:openEwtCVs;}
+function ledgerArray(type){return type==='vat'?vatLedger:ewtLedger;}
+function toggleLedgerCV(type,cv){const s=ledgerOpenSet(type);if(s.has(cv))s.delete(cv);else s.add(cv);renderLedgerSheet(type);}
+function editLedgerRow(id){const form=document.getElementById('ledgerEditRow_'+id);if(!form)return;form.classList.remove('hidden');const view=document.getElementById('ledgerViewRow_'+id);if(view)view.classList.add('editing');const inp=document.getElementById('led_cv_'+id);if(inp)inp.focus();}
+function cancelLedgerRow(id){const form=document.getElementById('ledgerEditRow_'+id);if(form)form.classList.add('hidden');const view=document.getElementById('ledgerViewRow_'+id);if(view)view.classList.remove('editing');}
+function saveLedgerRow(id,type){
+  const arr=ledgerArray(type);const idx=arr.findIndex(r=>r._id===id);
+  if(idx<0){showToast('Ledger row not found.');return;}
+  const g=fid=>{const el=document.getElementById(fid);return el?String(el.value||'').trim():'';};
+  // Reuse normalizeLedger so the row keeps its exact stored shape; _id is preserved.
+  const merged=normalizeLedger({...arr[idx],cv:g('led_cv_'+id),date:g('led_date_'+id)||'--',supplier:g('led_supplier_'+id),description:g('led_desc_'+id),amount:parseMoney(g('led_amount_'+id)),account:g('led_account_'+id),ref:g('led_ref_'+id)},type);
+  merged._id=id;
+  arr[idx]=merged;
+  saveAll();renderAll();
+  showToast(type.toUpperCase()+' ledger transaction updated.');
+}
+function deleteLedgerRow(id,type){
+  const arr=ledgerArray(type);const row=arr.find(r=>r._id===id);if(!row)return;
+  if(!confirm('Delete this '+type.toUpperCase()+' ledger transaction'+(row.cv?' for '+row.cv:'')+'? This cannot be undone.'))return;
+  if(type==='vat')vatLedger=vatLedger.filter(r=>r._id!==id);else ewtLedger=ewtLedger.filter(r=>r._id!==id);
+  saveAll();renderAll();
+  showToast(type.toUpperCase()+' ledger transaction deleted.');
+}
+function ledgerEditFormHtml(r,type){
+  const id=r._id;const amtLabel=(type==='vat'?'VAT':'EWT')+' Amount';
+  const f=(lbl,fid,val,cls='')=>`<div class="compact-field"><label>${esc(lbl)}</label><input class="edit-input ${cls}" id="${attr(fid)}" value="${attr(val)}"/></div>`;
+  return `<div class="ledger-edit-form"><div class="ledger-edit-grid">`
+    +f('CV Number','led_cv_'+id,r.cv)
+    +f('Date','led_date_'+id,r.date==='--'?'':r.date)
+    +f('Supplier','led_supplier_'+id,r.supplier)
+    +f('Description','led_desc_'+id,r.description)
+    +f(amtLabel,'led_amount_'+id,money(r.amount),'money-input')
+    +f('Account','led_account_'+id,r.account)
+    +f('Reference','led_ref_'+id,r.ref)
+    +`</div><div class="ledger-edit-actions"><button type="button" class="btn btn-small btn-primary" onclick="saveLedgerRow('${attr(id)}','${type}')">Save</button><button type="button" class="btn btn-small" onclick="cancelLedgerRow('${attr(id)}')">Cancel</button><button type="button" class="btn btn-small btn-danger" onclick="deleteLedgerRow('${attr(id)}','${type}')">Delete</button></div></div>`;
+}
+function renderLedgerSheet(type){
+  const rows=ledgerRowsByCV(type);
+  const allRows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();
+  const tx=visibleTransactionsForMonth();
+  const purchaseTotal=tx.reduce((a,t)=>a+(type==='vat'?t.vat:t.ewtAmount),0);
+  const ledgerTotal=allRows.reduce((a,r)=>a+r.amount,0);
+  const diff=purchaseTotal-ledgerTotal;
+  const prefix=type==='vat'?'vat':'ewt';const openSet=ledgerOpenSet(type);
+  document.getElementById(prefix+'Metrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${rows.length}</div><div class="metric-sub">${allRows.length} uploaded balance rows</div></div><div class="metric"><div class="metric-label">Purchase ${type.toUpperCase()}</div><div class="metric-value" style="font-size:16px">${peso(purchaseTotal)}</div><div class="metric-sub">from Purchase Transactions</div></div><div class="metric"><div class="metric-label">${type.toUpperCase()} Balance</div><div class="metric-value" style="font-size:16px">${peso(ledgerTotal)}</div><div class="metric-sub">from Online Book ledger upload</div></div><div class="metric ${isBalanced(diff)?'ok':'err'}"><div class="metric-label">Difference</div><div class="metric-value" style="font-size:16px">${peso(diff)}</div><div class="metric-sub">vs uploaded ledger balance</div></div><div class="metric err"><div class="metric-label">Not Balanced</div><div class="metric-value">${rows.filter(r=>!isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div><div class="metric ok"><div class="metric-label">Balanced</div><div class="metric-value">${rows.filter(r=>isBalanced(r.diff)).length}</div><div class="metric-sub">CV groups</div></div>`;
+  document.getElementById(prefix+'Thead').innerHTML=`<tr><th style="width:12%">CV Number</th><th style="width:15%">Supplier / voucher</th><th style="width:16%">Description</th><th class="num" style="width:10%">Purchase ${type.toUpperCase()}</th><th class="num" style="width:10%">Uploaded Balance</th><th class="num" style="width:10%">Difference</th><th style="width:8%">Status</th><th style="width:6%">Ledger rows</th><th style="width:9%">References</th><th style="width:9%">Actions</th></tr>`;
+  const tbody=document.getElementById(prefix+'Tbody'),tfoot=document.getElementById(prefix+'Tfoot');
+  tbody.innerHTML='';
+  if(!rows.length){tbody.innerHTML='<tr><td colspan="10"><div class="empty-state">No balance rows match your filters.</div></td></tr>';tfoot.innerHTML='';return}
+  rows.forEach(item=>{
+    const multi=item.rows.length>1;
+    const open=multi?openSet.has(item.cv):true;
+    const refs=compactList(item.rows.map(r=>r.ref),'--');
+    const descs=compactList(item.rows.map(r=>r.description),'--');
+    const tr=document.createElement('tr');
+    tr.className='ledger-cv-row'+(multi?' ledger-cv-expandable clickable-row':'')+(multi&&open?' open':'');
+    const cvCell=multi
+      ? `<div class="ledger-cv-toggle"><svg class="chevron${open?' open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg><span class="mono">${esc(item.cv)}</span><span class="ledger-count-badge">${item.rows.length}</span></div>`
+      : `<span class="mono">${esc(item.cv)}</span>`;
+    tr.innerHTML=`<td>${cvCell}</td><td>${esc(item.suppliers)}</td><td class="ledger-desc-cell">${esc(descs)}</td><td class="num">${peso(item.purchaseAmount)}</td><td class="num">${peso(item.ledgerAmount)}</td><td class="num">${varianceBadge(item.diff)}</td><td>${item.status==='balanced'?badge('ok','Balanced'):badge('err','Not balanced')}</td><td>${item.rows.length}</td><td class="mono">${esc(refs)}</td><td></td>`;
+    if(multi)tr.addEventListener('click',()=>toggleLedgerCV(type,item.cv));
+    tbody.appendChild(tr);
+    item.rows.forEach(r=>{
+      const detail=document.createElement('tr');
+      detail.id='ledgerViewRow_'+r._id;
+      detail.className='ledger-detail-row'+(open?'':' hidden');
+      detail.innerHTML=`<td></td><td>${esc(r.supplier||'--')}</td><td class="ledger-desc-cell">${esc(r.description||'--')}</td><td></td><td class="num">${peso(r.amount)}</td><td></td><td></td><td>${esc(r.account||'--')}</td><td class="mono">${esc(r.ref||'--')}</td><td class="ledger-actions-cell"><button type="button" class="btn btn-small ledger-edit-btn" onclick="editLedgerRow('${attr(r._id)}')">Edit</button><button type="button" class="btn btn-small btn-danger" onclick="deleteLedgerRow('${attr(r._id)}','${type}')">Delete</button></td>`;
+      tbody.appendChild(detail);
+      const form=document.createElement('tr');
+      form.id='ledgerEditRow_'+r._id;
+      form.className='ledger-edit-row hidden';
+      form.innerHTML=`<td colspan="10">${ledgerEditFormHtml(r,type)}</td>`;
+      tbody.appendChild(form);
+    });
+  });
+  tfoot.innerHTML=`<tr><td colspan="3">Grand total</td><td class="num">${peso(purchaseTotal)}</td><td class="num">${peso(ledgerTotal)}</td><td class="num">${varianceBadge(diff)}</td><td colspan="4"></td></tr>`;
+}
 function renderVatBalances(){renderLedgerSheet('vat')}
 function renderEwtBalances(){renderLedgerSheet('ewt')}
 
