@@ -128,6 +128,31 @@
 
   const snapshots = {};          // entityKey -> Map(record_id -> stable JSON)
   const lastModifiedMap = {};    // record_id -> { by, at }
+
+  /* ---------- persistent "known cloud ids" (fixes stale-device resurrection) ----------
+   * snapshots above is in-memory only and starts EMPTY every session, so on the first
+   * load after login it cannot tell a record that was deleted remotely while this device
+   * was offline from a brand-new local insert — and the preserve step would re-push the
+   * stale record, resurrecting deletions. We persist, per browser and per database, the
+   * set of record_ids this device last confirmed present in the cloud. Loaded at startup,
+   * it gives the preserve guard a reliable cross-session "was this ever in the cloud?"
+   * answer: absent-from-cloud + known => deleted remotely (drop); absent + unknown =>
+   * genuine unsynced insert (keep). This keeps the database authoritative. */
+  function simpleHash(s){ let h=0; s=String(s||''); for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; } return (h>>>0).toString(36); }
+  const KNOWN_IDS_KEY = 'vatDashKnownCloudIds_'+simpleHash(SUPABASE_URL);
+  let knownCloudIds = (function(){
+    const out={};
+    try{ const raw=localStorage.getItem(KNOWN_IDS_KEY); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==='object'){ for(const k in p){ if(Array.isArray(p[k])) out[k]=new Set(p[k]); } } } }catch(e){}
+    return out;
+  })();
+  function persistKnownCloudIds(){
+    try{
+      const obj={};
+      ENTITIES.forEach(e=>{ const snap=snapshots[e.key]; obj[e.key]= snap ? [...snap.keys()] : (knownCloudIds[e.key]?[...knownCloudIds[e.key]]:[]); });
+      localStorage.setItem(KNOWN_IDS_KEY, JSON.stringify(obj));
+      ENTITIES.forEach(e=>{ knownCloudIds[e.key]=new Set(obj[e.key]||[]); });
+    }catch(e){}
+  }
   let realtimeChannels = [];
   let auditChannel = null;
 
@@ -310,6 +335,7 @@
         if(c.op==='upsert'){ snapshots[c.e.key].set(c.id,c.json); lastModifiedMap[c.id]={ by:name, at:now }; }
         else { snapshots[c.e.key].delete(c.id); delete lastModifiedMap[c.id]; }
       }
+      persistKnownCloudIds();   // a deleted record leaves the known-ids set so it is never re-pushed
       lastCloudSave=new Date(now).toLocaleString();
       setCloudStatus('Shared cloud is up to date.','ok','Last change saved: '+lastCloudSave);
       if(manual) showToastSafe('Saved to shared cloud.');
@@ -356,18 +382,20 @@
         const arr=[]; const snap=new Map(); const identities=new Set();
         rows.forEach(rec=>{ arr.push(rec); snap.set(rec._id,stableStringify(rec)); identities.add(identityKey(e.key,rec)||('id:'+rec._id)); });
         const prev=snapshots[e.key];
-        // PRESERVE locally-created records that have not been pushed yet, so a refresh can
-        // never wipe a brand-new upload before it syncs. A record is a pending local insert
-        // only when it is NOT already in the cloud by record_id AND NOT already there by
-        // CONTENT identity (this is the key fix: a re-import or the demo masters no longer
-        // create a second copy) AND was never in a prior cloud snapshot (if it WAS, its
-        // absence means it was deleted remotely, so we correctly let it go).
+        const known=knownCloudIds[e.key];   // persisted across sessions/logins
+        // PRESERVE only genuinely NEW local records that were never synced. A local record
+        // is a pending insert when it is NOT in the cloud now by record_id, NOT in the cloud
+        // by CONTENT identity, AND was never previously confirmed in the cloud — checked
+        // against BOTH the in-session snapshot AND the persisted known-cloud-ids. If it WAS
+        // previously in the cloud (this session or a past one) but is gone now, it was
+        // deleted remotely, so we drop it instead of re-pushing it. This is what stops a
+        // stale/offline device from resurrecting records the database no longer has.
         (e.get()||[]).forEach(r=>{
           const id=r&&r._id; if(!id) return;
           if(snap.has(id)) return;
           const key=identityKey(e.key,r)||('id:'+id);
           if(identities.has(key)) return;
-          if(prev && prev.has(id)) return;
+          if((prev&&prev.has(id))||(known&&known.has(id))) return; // deleted remotely -> do not restore
           arr.push(r); identities.add(key); pendingLocal++;
         });
         if(!changed){
@@ -376,6 +404,7 @@
         }
         e.set(arr); snapshots[e.key]=snap;
       }
+      persistKnownCloudIds();   // record the current cloud truth so deletions stick across logins
       if(originalSaveAll) originalSaveAll();   // refresh local cache only
       if(changed || pendingLocal || Object.keys(dupeDeletes).length || !opts.quiet) rerender();
     }finally{ cloudApplying=false; }
@@ -435,6 +464,7 @@
       const snap=new Map(); rows.forEach(r=>{ snap.set(r._id,stableStringify(r)); lastModifiedMap[r._id]={ by:name, at:now }; });
       snapshots[e.key]=snap;
     }
+    persistKnownCloudIds();
     if(originalSaveAll) originalSaveAll();
     cloudApplying=true; try{ rerender(); }finally{ cloudApplying=false; }
   }
@@ -458,6 +488,7 @@
       if(!snapshots[e.key]||!snapshots[e.key].has(id)) return; // already gone / own echo
       e.set((e.get()||[]).filter(r=>r._id!==id));
       snapshots[e.key].delete(id); delete lastModifiedMap[id];
+      persistKnownCloudIds();   // a remote delete drops the id so this device never restores it
       applyAndRender(); return;
     }
     if(!payload.new||!payload.new.data) return;
@@ -470,6 +501,7 @@
     e.set(arr);
     (snapshots[e.key]||(snapshots[e.key]=new Map())).set(id,json);
     lastModifiedMap[id]={ by:payload.new.last_modified_by_name, at:payload.new.last_modified_at };
+    persistKnownCloudIds();
     applyAndRender();
   }
 
