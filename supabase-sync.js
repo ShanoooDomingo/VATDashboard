@@ -36,7 +36,8 @@
     atcMaster:'vat_atc_master',
     vatCategories:'vat_categories',
     auditLog:'audit_log',
-    profiles:'profiles'
+    profiles:'profiles',
+    tombstones:'vat_deleted_records'
   }, (CFG.tables && typeof CFG.tables === 'object') ? CFG.tables : {});
 
   /* ---------- the six shared data tables ----------
@@ -326,6 +327,15 @@
         const { error } = await supabaseClient.from(table).delete().in('record_id',deletes[table]);
         if(error) throw error;
       }
+      // Deletion is a first-class synced operation: record a TOMBSTONE for every deleted
+      // record so the deletion propagates to EVERY device — even one that never observed
+      // the record — and can never be resurrected by a stale local cache. Best-effort: if
+      // the tombstone table is not present, the known-ids guard still protects most cases.
+      const tombRows=changes.filter(c=>c.op==='delete').map(c=>({ record_id:c.id, entity:c.e.key, deleted_by:cloudUser.id, deleted_at:now }));
+      if(tombRows.length){
+        try{ const { error } = await supabaseClient.from(TBL.tombstones).upsert(tombRows,{ onConflict:'record_id' }); if(error) throw error; }
+        catch(err){ console.warn('Tombstone write skipped (create table '+TBL.tombstones+' to make deletes fully cross-device):',err&&err.message); }
+      }
       if(audits.length){
         const { error } = await supabaseClient.from(TBL.auditLog).insert(audits);
         if(error) throw error;
@@ -362,6 +372,14 @@
     cloudApplying=true;
     let changed=false, pendingLocal=0;
     const dupeDeletes={};   // table -> [record_id,...] redundant cloud copies to remove ('hard' only)
+    const tombDeletes={};   // table -> [record_id,...] tombstoned rows still present in the cloud
+    // Load the shared TOMBSTONE list first: record_ids that were deleted on any device.
+    // These are authoritative across ALL devices — a tombstoned record is removed from the
+    // local cache, never re-pushed, and hard-deleted from the cloud if it slipped back in.
+    // Best-effort: if the table does not exist yet, fall back to the known-ids guard.
+    const tombstoned=new Set();
+    try{ const tomb=await fetchAllRows(TBL.tombstones,'record_id'); (tomb||[]).forEach(r=>{ if(r&&r.record_id)tombstoned.add(r.record_id); }); }
+    catch(err){ /* tombstone table absent -> known-ids guard still applies */ }
     try{
       for(const e of ENTITIES){
         // Page through the FULL table (works around the 1,000-row request cap).
@@ -371,6 +389,11 @@
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
           return rec;
         });
+        // Drop any cloud row that has been tombstoned (deleted elsewhere) and queue it for
+        // hard removal so the deletion is enforced for everyone.
+        if(tombstoned.size){
+          rows=rows.filter(rec=>{ if(tombstoned.has(rec._id)){ (tombDeletes[e.table]||(tombDeletes[e.table]=[])).push(rec._id); return false; } return true; });
+        }
         // 'hard' entities: collapse any pre-existing cloud duplicates (same content under
         // different record_ids, e.g. suppliers/VAT categories re-seeded on many devices) to
         // one deterministic survivor, and remember the losers so we can clean the cloud.
@@ -392,6 +415,7 @@
         // stale/offline device from resurrecting records the database no longer has.
         (e.get()||[]).forEach(r=>{
           const id=r&&r._id; if(!id) return;
+          if(tombstoned.has(id)) return;   // explicitly deleted on some device -> never restore
           if(snap.has(id)) return;
           const key=identityKey(e.key,r)||('id:'+id);
           if(identities.has(key)) return;
@@ -416,6 +440,14 @@
       if(!ids.length) continue;
       try{ await supabaseClient.from(table).delete().in('record_id',ids); }
       catch(err){ console.warn('Duplicate cleanup skipped for',table,err&&err.message); }
+    }
+    // Enforce tombstones in the cloud: remove any tombstoned records that were still present
+    // (e.g. a stale device re-inserted one before this fix). Idempotent — clean once, then no-op.
+    for(const table in tombDeletes){
+      const ids=[...new Set(tombDeletes[table])];
+      if(!ids.length) continue;
+      try{ await supabaseClient.from(table).delete().in('record_id',ids); }
+      catch(err){ console.warn('Tombstone enforcement skipped for',table,err&&err.message); }
     }
     // Push any preserved local inserts (and any save deferred during applying).
     if(pendingLocal>0) deferredSync=true;

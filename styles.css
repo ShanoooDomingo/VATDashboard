@@ -1084,3 +1084,13 @@ table.audit-table td{vertical-align:top}
 .ledger-edit-grid .edit-input{width:100%!important}
 .ledger-edit-actions{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
 @media(max-width:760px){.ledger-edit-grid{grid-template-columns:1fr}}
+/* --- Cloud button/popover must obey modal layering --- */
+/* Earlier this was pinned above everything (z-index 3000/2200), so an open modal's blur
+   overlay (z-index 1600) did NOT cover the Cloud button. Drop the widget and popover
+   BELOW the modal layer but keep them above normal dashboard content, so: (a) with no
+   modal open, the popover still floats above tables/sheets; (b) when any modal/dialog
+   overlay is open, it covers and blurs the Cloud button and blocks its clicks like every
+   other element. The backdrop-filter trap on .header-right stays removed so the fixed
+   popover still escapes to render above dashboard content. */
+.cloud-widget{z-index:500!important;}
+.cloud-popover{z-index:500!important;}
