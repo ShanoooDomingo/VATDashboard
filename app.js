@@ -1626,8 +1626,8 @@ function documentsSection(t){
   const docRows=docs.map(d=>`<div class="doc-row" data-doc-id="${attr(d._id)}">${docFileIconSvg(d.ext)}<div class="doc-info"><div class="doc-name">${esc(invoiceDocDisplayName(d))}</div><div class="doc-meta">${esc(d.originalName||'')}${d.fileSize?' · '+esc(formatFileSize(d.fileSize)):''}${d.uploadedByName?' · Uploaded by '+esc(d.uploadedByName):''}${docUploadDateText(d.uploadedAt)?' · '+esc(docUploadDateText(d.uploadedAt)):''}</div></div><div class="doc-row-actions action-buttons"><button type="button" class="btn btn-small" onclick="viewInvoiceDoc('${attr(d._id)}')">View</button><button type="button" class="btn btn-small" onclick="downloadInvoiceDoc('${attr(d._id)}')">Download</button><button type="button" class="btn btn-small" onclick="startDocReplace('${attr(d._id)}')">Replace</button><button type="button" class="btn btn-small btn-danger" onclick="deleteInvoiceDoc('${attr(d._id)}')">Delete</button></div></div>`).join('');
   const pendingRows=pending.map(p=>`<div class="doc-row uploading">${docFileIconSvg('')}<div class="doc-info"><div class="doc-name">${esc(p.fileName)}</div><div class="doc-meta">Uploading to shared cloud…</div></div></div>`).join('');
   const list=(docRows||pendingRows)?docRows+pendingRows:'<div class="empty-state doc-empty">No supporting documents uploaded.</div>';
-  return `<div class="verification-section docs-section" data-docs-txn="${attr(t._id)}">
-    <div class="verification-section-title">Supporting documents <span class="doc-count">(${docs.length})</span></div>
+  return `<div class="docs-section" data-docs-txn="${attr(t._id)}">
+    <div class="docs-section-title">Supporting documents <span class="doc-count">(${docs.length})</span></div>
     <div class="doc-list">${list}</div>
     <div class="doc-actions-row"><button type="button" class="btn btn-small" onclick="startDocUpload('${attr(t._id)}')">Upload document</button><span class="doc-hint">PDF, JPG, PNG · max 10 MB · shared with all users</span></div>
   </div>`;
@@ -1808,9 +1808,9 @@ function workingDetailTable(g){
           <div class="compact-field"><label>Status</label>${verificationSelect(t)}</div>
           <div class="compact-field compact-note"><label>Notes</label><input class="note-input wp-autosave" data-id="${attr(t._id)}" id="wp_note_${attr(t._id)}" value="${attr(t.reviewNote)}" placeholder="Verification note"/></div>
         </div>
+        ${documentsSection(t)}
       </div>
     </div>
-    ${documentsSection(t)}
   </div>`}).join('');
   return `<div class="verification-card-list">${cards}</div>`;
 }
