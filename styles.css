@@ -1094,3 +1094,22 @@ table.audit-table td{vertical-align:top}
    popover still escapes to render above dashboard content. */
 .cloud-widget{z-index:500!important;}
 .cloud-popover{z-index:500!important;}
+
+/* ---- Supporting documents (invoice document management, CV review popup) ----
+   Full-width block below the 4-column verification-line grid inside each card.
+   Uses the shared design tokens so it inherits the dashboard's look, including the
+   .cv-review-dialog restyles applied to .verification-section / .btn-small. */
+.docs-section{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}
+.doc-list{display:flex;flex-direction:column;gap:6px;margin:6px 0 8px}
+.doc-row{display:flex;align-items:center;gap:10px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)}
+.doc-row svg{width:16px;height:16px;flex:0 0 auto;color:var(--text3)}
+.doc-info{min-width:0}
+.doc-name{font-size:12px;font-weight:600;color:var(--text);word-break:break-all}
+.doc-meta{font-size:11px;color:var(--text3);word-break:break-word}
+.doc-row-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.doc-row.uploading{opacity:.65}
+.doc-row.uploading .doc-meta{color:var(--accent)}
+.doc-empty{font-size:11px;color:var(--text3);padding:2px 0 6px;text-align:left}
+.doc-actions-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.doc-hint{font-size:11px;color:var(--text3)}
+.doc-count{font-weight:500;color:var(--text3)}

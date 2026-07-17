@@ -35,6 +35,7 @@
     supplierMaster:'vat_supplier_master',
     atcMaster:'vat_atc_master',
     vatCategories:'vat_categories',
+    invoiceDocuments:'vat_invoice_documents',
     auditLog:'audit_log',
     profiles:'profiles',
     tombstones:'vat_deleted_records'
@@ -56,7 +57,10 @@
     { key:'ewtLedger',      table:TBL.ewtLedger,       module:'EWT Balances',          dedupe:'hard',    get:()=>ewtLedger,      set:v=>{ewtLedger=v},      norm:r=>normalizeLedger(r,'ewt') },
     { key:'supplierMaster', table:TBL.supplierMaster,  module:'Supplier Master',       dedupe:'hard',    get:()=>supplierMaster, set:v=>{supplierMaster=v}, norm:r=>normalizeSupplier(r) },
     { key:'atcMaster',      table:TBL.atcMaster,       module:'ATC Master',            dedupe:'hard',    get:()=>atcMaster,      set:v=>{atcMaster=v},      norm:r=>normalizeAtcMaster(r) },
-    { key:'VAT_CATEGORIES', table:TBL.vatCategories,   module:'VAT Categories',        dedupe:'hard',    get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) }
+    { key:'VAT_CATEGORIES', table:TBL.vatCategories,   module:'VAT Categories',        dedupe:'hard',    get:()=>VAT_CATEGORIES, set:v=>{VAT_CATEGORIES=v}, norm:r=>normalizeVatCategoryMaster(r) },
+    // Invoice document METADATA only (the files themselves live in Supabase Storage).
+    // optional:true keeps the whole load from failing while the table is not yet created.
+    { key:'invoiceDocuments', table:TBL.invoiceDocuments, module:'Invoice Documents',   dedupe:'prevent', optional:true, get:()=>invoiceDocuments, set:v=>{invoiceDocuments=v}, norm:r=>normalizeInvoiceDocument(r) }
   ];
   const ENTITY_BY_KEY = Object.fromEntries(ENTITIES.map(e=>[e.key,e]));
 
@@ -80,6 +84,8 @@
       case 'vatLedger':
       case 'ewtLedger': return 'led:'+idParts(entityKey, r.cv, r.date, r.account, r.ref, r.description, r.amount);
       case 'transactions': return 'tx:'+idParts(r.cv, r.voucherName, r.date, r.inv, r.description, r.tin, r.amount, r.vat, r.ewtAmount, r.atcCode, r.vatCategory, r.accountingTitle, r.bankAccount);
+      // storagePath embeds the doc's own _id, so it is unique and stable across devices.
+      case 'invoiceDocuments': return r.storagePath?('doc:'+idParts(r.storagePath)):'';
       default: return '';
     }
   }
@@ -383,7 +389,15 @@
     try{
       for(const e of ENTITIES){
         // Page through the FULL table (works around the 1,000-row request cap).
-        const data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at');
+        let data;
+        try{ data = await fetchAllRows(e.table,'record_id,data,last_modified_by_name,last_modified_at'); }
+        catch(err){
+          // Optional tables (e.g. invoice documents before the SQL setup ran) must never
+          // break loading of the core dataset. Local rows stay untouched and push later.
+          if(!e.optional) throw err;
+          console.warn('Optional table missing or unreadable, skipped:',e.table,err&&err.message);
+          continue;
+        }
         let rows=(data||[]).map(r=>{
           const rec=e.norm(r.data); rec._id=r.record_id;
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
@@ -643,7 +657,7 @@
   }
 
   /* ---------- Audit Trail page (admin only) ---------- */
-  const FIELD_LABELS={ voucherName:'Voucher', supplier:'Supplier', registeredName:'Registered Name', tin:'TIN', cv:'CV No.', inv:'Invoice', date:'Date', description:'Description', amount:'Amount', vat:'VAT', total:'Total', ewtAmount:'EWT', vatable:'Vatable', nonVatable:'Non-vatable', atcCode:'ATC Code', vatCategory:'VAT Category', manualStatus:'Status', reviewNote:'Note', accountingTitle:'Accounting Title', bankAccount:'Bank Account', address:'Address', city:'City', zip:'ZIP', code:'Code', label:'Description', rate:'Rate', kind:'VAT Type', source:'Source', account:'Account', ref:'Reference', supplierManualOverride:'Manual override' };
+  const FIELD_LABELS={ voucherName:'Voucher', supplier:'Supplier', registeredName:'Registered Name', tin:'TIN', cv:'CV No.', inv:'Invoice', date:'Date', description:'Description', amount:'Amount', vat:'VAT', total:'Total', ewtAmount:'EWT', vatable:'Vatable', nonVatable:'Non-vatable', atcCode:'ATC Code', vatCategory:'VAT Category', manualStatus:'Status', reviewNote:'Note', accountingTitle:'Accounting Title', bankAccount:'Bank Account', address:'Address', city:'City', zip:'ZIP', code:'Code', label:'Description', rate:'Rate', kind:'VAT Type', source:'Source', account:'Account', ref:'Reference', supplierManualOverride:'Manual override', txnId:'Transaction', originalName:'File name', ext:'File type', mimeType:'MIME type', fileSize:'File size', storagePath:'Storage file', uploadedAt:'Uploaded at', uploadedBy:'Uploaded by (id)', uploadedByName:'Uploaded by' };
   const MONEY_FIELDS=new Set(['amount','vat','total','ewtAmount','vatable','nonVatable']);
   function fieldLabel(k){ return FIELD_LABELS[k]||k; }
   function valLabel(k,v){
@@ -1006,6 +1020,34 @@
   // so they never look at stale data after switching away.
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) backgroundRefresh(); });
   window.addEventListener('focus',()=>backgroundRefresh());
+
+  /* ---------- invoice document storage (Supabase Storage) ----------
+   * Files live in a PRIVATE bucket; every read goes through a short-lived signed URL
+   * created for the authenticated session, so nothing is publicly reachable. Only
+   * document METADATA is synced through the table machinery above — file bytes are
+   * uploaded/fetched on demand. app.js calls this via window.vatDocStorage inside
+   * click handlers only, so script load order does not matter. */
+  const DOC_BUCKET=(CFG.storageBucket&&String(CFG.storageBucket).trim())||'invoice-documents';
+  const DOC_URL_TTL_SECONDS=300;
+  window.vatDocStorage={
+    ready:()=>!!(supabaseClient&&cloudUser),
+    user:()=>({ id:(cloudUser&&cloudUser.id)||'', name:currentUserName() }),
+    upload:async(path,file)=>{
+      const { error } = await supabaseClient.storage.from(DOC_BUCKET).upload(path,file,{ contentType:file.type||'application/octet-stream', upsert:false });
+      if(error) throw error;
+    },
+    signedUrl:async(path,downloadName)=>{
+      const { data, error } = await supabaseClient.storage.from(DOC_BUCKET).createSignedUrl(path,DOC_URL_TTL_SECONDS,downloadName?{ download:downloadName }:undefined);
+      if(error) throw error;
+      return data.signedUrl;
+    },
+    remove:async(paths)=>{
+      const list=[].concat(paths).filter(Boolean);
+      if(!list.length) return;
+      const { error } = await supabaseClient.storage.from(DOC_BUCKET).remove(list);
+      if(error) throw error;
+    }
+  };
 
   /* ---------- exports ---------- */
   window.signUp=signUp; window.logIn=logIn; window.logOut=logOut;
