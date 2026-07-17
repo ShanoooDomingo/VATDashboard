@@ -4,6 +4,7 @@ const EWT_LEDGER_KEY='vatPurchaseEwtLedgerCleanV1';
 const SUPPLIER_MASTER_KEY='vatPurchaseSupplierMasterV1';
 const ATC_MASTER_KEY='vatPurchaseAtcMasterDatabaseOnlyV1';
 const VAT_CATEGORIES_KEY='vatPurchaseVatCategoriesMasterV1';
+const INVOICE_DOCS_KEY='vatPurchaseInvoiceDocumentsV1';
 const COMPANY_PROFILE={tin:'008737954',filingType:'P',registeredName:'LOCANDSTOR 247 INC',lastName:'',firstName:'',middleName:'',tradeName:'LOCSTOR 247 INC',address:'54 E RODRIGUEZ JR AVE BRGY BAGONG ILOG',cityZip:'PASIG CITY NCR 1604',branchCode:'043',taxRateCode:'12'};
 const demoTransactions=[];
 const demoVatLedger=[];
@@ -86,7 +87,7 @@ function dateSortNumber(value){
   return null;
 }
 function loadArray(key,fallback){try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(err){}return fallback}
-function saveAll(){invalidateVisibleCache();try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES))}catch(err){}}
+function saveAll(){invalidateVisibleCache();try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES));localStorage.setItem(INVOICE_DOCS_KEY,JSON.stringify(invoiceDocuments))}catch(err){}}
 function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';if(['journal','journal entry','journal-entry','journal_entry','je'].includes(v))return 'journal';if(['adjusting','adjusting entry','adjusting-entry','adjusting_entry','adjustment','aje'].includes(v))return 'adjusting';return 'unreviewed'}
 function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';if(status==='journal')return 'Journal Entry';if(status==='adjusting')return 'Adjusting Entry';return 'Unreviewed'}
 // Journal Entry and Adjusting Entry are intentional postings that do not require
@@ -173,12 +174,18 @@ function nextTransactionSeq(t){
 }
 function normalizeTransaction(t){const manualStatus=parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status);const exempt=(manualStatus==='journal'||manualStatus==='adjusting');let a=computeAmounts(t||{});if(exempt)a={...a,vatCategory:'',vatable:0,nonVatable:0,vat:0,total:a.amount};const _seq=nextTransactionSeq(t);const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=exempt?'':normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=exempt?0:expectedEwtAmount({amount:a.amount,atcCode});return{_id:t?._id||makeId('tx'),_seq,voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus,reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
 function normalizeLedger(row,type){return{_id:row?._id||makeId(type==='vat'?'vat':'ewt'),cv:String(row?.cv||row?.cv_no||row?.cv_number||'').trim(),supplier:String(row?.supplier||row?.supplier_name||row?.payee||row?.voucherName||row?.voucher_name||'').trim(),date:String(row?.date||row?.transaction_date||'').trim()||'--',description:String(row?.description??row?.desc??row?.memo??row?.particulars??row?.nature??'').trim(),amount:parseMoney(row?.amount??row?.balance??row?.ending_balance??(type==='vat'?row?.vat_amount??row?.input_vat:row?.ewt_amount??row?.withholding_tax)),account:String(row?.account||row?.ledger_account||'').trim(),ref:String(row?.ref||row?.reference||row?.gl_ref||'').trim(),type}}
+// Invoice document METADATA. The files themselves live in Supabase Storage (private
+// bucket); each record links a stored file to its transaction by the transaction's
+// persistent _id (txnId), never by CV/invoice number. Explicit literal like every
+// other normalizer so records keep an exact, stable shape through cloud round-trips.
+function normalizeInvoiceDocument(d){return{_id:d?._id||makeId('doc'),txnId:String(d?.txnId||'').trim(),originalName:String(d?.originalName||'').trim(),ext:String(d?.ext||'').trim().toLowerCase(),mimeType:String(d?.mimeType||'').trim(),fileSize:Number(d?.fileSize||0),storagePath:String(d?.storagePath||'').trim(),uploadedAt:String(d?.uploadedAt||'').trim(),uploadedBy:String(d?.uploadedBy||'').trim(),uploadedByName:String(d?.uploadedByName||'').trim()}}
 let VAT_CATEGORIES=loadArray(VAT_CATEGORIES_KEY,demoVatCategories).map(normalizeVatCategoryMaster);
 let atcMaster=loadArray(ATC_MASTER_KEY,demoAtcMaster).map(normalizeAtcMaster);
 let supplierMaster=loadArray(SUPPLIER_MASTER_KEY,demoSupplierMaster).map(normalizeSupplier);
 let transactions=loadArray(TX_KEY,demoTransactions).map(normalizeTransaction);
 let vatLedger=loadArray(VAT_LEDGER_KEY,demoVatLedger).map(r=>normalizeLedger(r,'vat'));
 let ewtLedger=loadArray(EWT_LEDGER_KEY,demoEwtLedger).map(r=>normalizeLedger(r,'ewt'));
+let invoiceDocuments=loadArray(INVOICE_DOCS_KEY,[]).map(normalizeInvoiceDocument);
 function monthInfo(month,year){const m=Math.max(1,Math.min(12,Number(month)||1));const mm=String(m).padStart(2,'0');const yr=String(year||'').trim();return{key:yr?`${yr}-${mm}`:`m${mm}`,label:`${MONTH_NAMES[m-1][0]}${yr?' '+yr:''}`,order:yr?Number(yr)*100+m:m}}
 function monthInfoFromDate(value){const raw=String(value??'').trim();if(!raw||raw==='--'||raw==='-'||raw.toLowerCase()==='n/a')return{key:'undated',label:'Undated',order:999999};let m=raw.match(/^\s*(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?/);if(m)return monthInfo(Number(m[2]),m[1]);m=raw.match(/^\s*(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2,4}))?/);if(m){const first=Number(m[1]),second=Number(m[2]);const month=first>12?second:first;let yr=m[3]||'';if(yr&&yr.length===2)yr='20'+yr;return monthInfo(month,yr)}const lower=raw.toLowerCase();const y=(raw.match(/\b(19\d{2}|20\d{2})\b/)||[])[1]||'';for(let i=0;i<MONTH_NAMES.length;i++){if(MONTH_NAMES[i].some(alias=>new RegExp(`\\b${alias}\\b`).test(lower)))return monthInfo(i+1,y)}const parsed=new Date(raw);if(!Number.isNaN(parsed.getTime()))return monthInfo(parsed.getMonth()+1,String(parsed.getFullYear()));return{key:'undated',label:'Undated',order:999999}}
 function recordMonthKey(row){return monthInfoFromDate(row?.date).key}
@@ -1586,6 +1593,173 @@ function atcCodeSelect(t){const blocked=blockedAtcForVatCategory(t.vatCategory);
 function populateAddAtcDropdown(){const el=document.getElementById('f_atc_code');if(!el)return;const current=el.value;const blocked=blockedAtcForVatCategory(getValue('f_vat_category'));el.innerHTML=atcMasterOptions(current,blocked)}
 // Add Transaction form: re-apply the VAT/ATC rule when the VAT Category changes.
 function enforceAddAtcVatRule(){const catEl=document.getElementById('f_vat_category');const atcEl=document.getElementById('f_atc_code');if(!catEl||!atcEl)return;const cat=normalizeVATCategory(catEl.value);const current=normalizeATC(atcEl.value);const blocked=blockedAtcForVatCategory(cat);const invalid=current&&blocked.includes(current);if(invalid)showToast(atcVatConflictMessage(current,cat)+' It has been cleared.');atcEl.innerHTML=atcMasterOptions(invalid?'':current,blocked)}
+/* ---- Invoice document management (Supporting Documents per transaction) ----
+ * Metadata lives in the `invoiceDocuments` array (synced through the shared cloud
+ * like every other dataset); file bytes live in a private Supabase Storage bucket
+ * reached through window.vatDocStorage (defined in supabase-sync.js). Documents are
+ * linked to a transaction by its persistent _id, so CV / invoice renames never break
+ * the link. Display names are derived live from the transaction's current CV and
+ * invoice number, so they stay correct after a CV rename. */
+const DOC_MAX_BYTES=10*1024*1024;
+const DOC_ALLOWED_EXT={pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png'};
+let docUploadTarget=null;              // {mode:'new',txnId} | {mode:'replace',docId}
+const pendingDocUploads=new Map();     // uploadKey -> {txnId,fileName} (survives popup rebuilds)
+function docsForTransaction(txnId){return invoiceDocuments.filter(d=>d.txnId===txnId).sort((a,b)=>String(a.uploadedAt).localeCompare(String(b.uploadedAt))||String(a._id).localeCompare(String(b._id)))}
+function sanitizeFileToken(v){return String(v??'').normalize('NFKD').replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^[-.]+|[-.]+$/g,'').slice(0,60)}
+function invoiceDocDisplayName(d){const t=transactions.find(x=>x._id===d.txnId);const cv=sanitizeFileToken(t?.cv)||'NOCV';const inv=sanitizeFileToken(t?.inv)||'NOINV';const n=docsForTransaction(d.txnId).findIndex(x=>x._id===d._id)+1;return `${cv}_${inv}_${n>0?n:1}.${d.ext||'bin'}`}
+function formatFileSize(b){b=Number(b||0);if(b>=1048576)return (b/1048576).toFixed(1)+' MB';return Math.max(1,Math.round(b/1024))+' KB'}
+function docUploadDateText(iso){const d=new Date(String(iso||''));return Number.isNaN(d.getTime())?'':`${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`}
+function docFileIconSvg(ext){const image=(ext==='jpg'||ext==='jpeg'||ext==='png');return image
+  ?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>'
+  :'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>'}
+function validateDocFile(f){const ext=String(f.name.split('.').pop()||'').toLowerCase();
+  if(!DOC_ALLOWED_EXT[ext])return{ok:false,msg:`"${f.name}" is not a supported file type. Use PDF, JPG, JPEG, or PNG.`};
+  if(f.size>DOC_MAX_BYTES)return{ok:false,msg:`"${f.name}" is ${formatFileSize(f.size)} — the limit is 10 MB per file.`};
+  return{ok:true,ext}}
+// NOTE: buttons in this section intentionally carry NO id attribute — the CV popup's
+// rebuild guard in renderCVReviewModal() skips re-rendering while an element WITH an
+// id inside the popup has focus, and a clicked button must not suppress the rebuild
+// that shows the updated document list.
+function documentsSection(t){
+  const docs=docsForTransaction(t._id);
+  const pending=[...pendingDocUploads.values()].filter(p=>p.txnId===t._id);
+  const docRows=docs.map(d=>`<div class="doc-row" data-doc-id="${attr(d._id)}">${docFileIconSvg(d.ext)}<div class="doc-info"><div class="doc-name">${esc(invoiceDocDisplayName(d))}</div><div class="doc-meta">${esc(d.originalName||'')}${d.fileSize?' · '+esc(formatFileSize(d.fileSize)):''}${d.uploadedByName?' · Uploaded by '+esc(d.uploadedByName):''}${docUploadDateText(d.uploadedAt)?' · '+esc(docUploadDateText(d.uploadedAt)):''}</div></div><div class="doc-row-actions action-buttons"><button type="button" class="btn btn-small" onclick="viewInvoiceDoc('${attr(d._id)}')">View</button><button type="button" class="btn btn-small" onclick="downloadInvoiceDoc('${attr(d._id)}')">Download</button><button type="button" class="btn btn-small" onclick="startDocReplace('${attr(d._id)}')">Replace</button><button type="button" class="btn btn-small btn-danger" onclick="deleteInvoiceDoc('${attr(d._id)}')">Delete</button></div></div>`).join('');
+  const pendingRows=pending.map(p=>`<div class="doc-row uploading">${docFileIconSvg('')}<div class="doc-info"><div class="doc-name">${esc(p.fileName)}</div><div class="doc-meta">Uploading to shared cloud…</div></div></div>`).join('');
+  const list=(docRows||pendingRows)?docRows+pendingRows:'<div class="empty-state doc-empty">No supporting documents uploaded.</div>';
+  return `<div class="verification-section docs-section" data-docs-txn="${attr(t._id)}">
+    <div class="verification-section-title">Supporting documents <span class="doc-count">(${docs.length})</span></div>
+    <div class="doc-list">${list}</div>
+    <div class="doc-actions-row"><button type="button" class="btn btn-small" onclick="startDocUpload('${attr(t._id)}')">Upload document</button><span class="doc-hint">PDF, JPG, PNG · max 10 MB · shared with all users</span></div>
+  </div>`;
+}
+// In-place refresh of just the documents block, so upload/delete feedback appears even
+// while the popup's rebuild guard is active (user editing another field in the card).
+function refreshDocsSections(txnId){
+  document.querySelectorAll('.docs-section[data-docs-txn]').forEach(sec=>{
+    if(sec.getAttribute('data-docs-txn')!==txnId)return;
+    const t=transactions.find(x=>x._id===txnId);
+    if(t)sec.outerHTML=documentsSection(t);
+  });
+}
+function docStorageReady(){if(window.vatDocStorage&&window.vatDocStorage.ready())return true;showToast('Log in to the shared cloud before working with documents.');return false}
+function startDocUpload(txnId){
+  if(!docStorageReady())return;
+  const inp=document.getElementById('docFileInput');if(!inp)return;
+  docUploadTarget={mode:'new',txnId};
+  inp.multiple=true;inp.value='';inp.click();
+}
+function startDocReplace(docId){
+  if(!docStorageReady())return;
+  const inp=document.getElementById('docFileInput');if(!inp)return;
+  docUploadTarget={mode:'replace',docId};
+  inp.multiple=false;inp.value='';inp.click();
+}
+async function handleDocFileInput(e){
+  const target=docUploadTarget;docUploadTarget=null;
+  const files=[...(e.target.files||[])];e.target.value='';
+  if(!target||!files.length)return;
+  if(!docStorageReady())return;
+  const valid=[];
+  for(const f of files){const v=validateDocFile(f);if(!v.ok){showToast(v.msg);continue}valid.push({file:f,ext:v.ext})}
+  if(!valid.length)return;
+  if(target.mode==='replace'){await replaceInvoiceDocFile(target.docId,valid[0]);return}
+  const txnId=target.txnId;
+  if(!transactions.some(t=>t._id===txnId)){showToast('Transaction not found.');return}
+  for(const {file,ext} of valid){
+    const docId=makeId('doc');
+    // Storage path is built ONLY from generated ids + sanitized extension (never from
+    // the user's filename), so it is collision-proof and key-safe. The friendly
+    // CV_INV_n name is derived at display/download time from the live transaction.
+    const path=`txn/${txnId}/${docId}.${ext}`;
+    const uploadKey=docId;
+    pendingDocUploads.set(uploadKey,{txnId,fileName:file.name});
+    refreshDocsSections(txnId);
+    try{
+      // Upload the object FIRST; metadata is only written after the file is safely
+      // stored, so a synced record can never point at a missing file.
+      await window.vatDocStorage.upload(path,file);
+      const u=window.vatDocStorage.user();
+      invoiceDocuments.push(normalizeInvoiceDocument({_id:docId,txnId,originalName:file.name,ext,mimeType:file.type||DOC_ALLOWED_EXT[ext],fileSize:file.size,storagePath:path,uploadedAt:new Date().toISOString(),uploadedBy:u.id,uploadedByName:u.name}));
+      saveAll();
+      showToast(`"${file.name}" uploaded and shared with all users.`);
+    }catch(err){
+      console.error('Document upload failed:',err);
+      showToast(`Upload failed for "${file.name}": ${err.message||err}`);
+    }finally{
+      pendingDocUploads.delete(uploadKey);
+      refreshDocsSections(txnId);
+    }
+  }
+}
+async function replaceInvoiceDocFile(docId,picked){
+  const d=invoiceDocuments.find(x=>x._id===docId);
+  if(!d){showToast('Document record not found.');return}
+  const {file,ext}=picked;
+  const oldPath=d.storagePath;
+  // Never overwrite the old object in place: upload to a fresh path, switch the
+  // record over, then clean up the old object best-effort. A concurrent viewer keeps
+  // a working file at every moment, and a failed upload leaves the record untouched.
+  const newPath=`txn/${d.txnId}/${d._id}_${Date.now().toString(36)}.${ext}`;
+  pendingDocUploads.set(docId,{txnId:d.txnId,fileName:file.name});
+  refreshDocsSections(d.txnId);
+  try{
+    await window.vatDocStorage.upload(newPath,file);
+    const u=window.vatDocStorage.user();
+    d.originalName=file.name;d.ext=ext;d.mimeType=file.type||DOC_ALLOWED_EXT[ext];d.fileSize=file.size;
+    d.storagePath=newPath;d.uploadedAt=new Date().toISOString();d.uploadedBy=u.id;d.uploadedByName=u.name;
+    saveAll();
+    if(oldPath&&oldPath!==newPath)window.vatDocStorage.remove(oldPath).catch(err=>console.warn('Old document object cleanup skipped:',err&&err.message));
+    showToast(`Document replaced with "${file.name}".`);
+  }catch(err){
+    console.error('Document replace failed:',err);
+    showToast(`Replace failed for "${file.name}": ${err.message||err}`);
+  }finally{
+    pendingDocUploads.delete(docId);
+    refreshDocsSections(d.txnId);
+  }
+}
+async function viewInvoiceDoc(docId){
+  const d=invoiceDocuments.find(x=>x._id===docId);
+  if(!d){showToast('Document record not found.');return}
+  if(!docStorageReady())return;
+  // Open the window synchronously (popup-blocker safe), then point it at the signed URL.
+  const w=window.open('','_blank');
+  try{
+    const url=await window.vatDocStorage.signedUrl(d.storagePath);
+    if(w)w.location=url;else window.open(url,'_blank');
+  }catch(err){
+    if(w)w.close();
+    console.error('Document view failed:',err);
+    showToast('Could not open document: '+(err.message||err));
+  }
+}
+async function downloadInvoiceDoc(docId){
+  const d=invoiceDocuments.find(x=>x._id===docId);
+  if(!d){showToast('Document record not found.');return}
+  if(!docStorageReady())return;
+  try{
+    const url=await window.vatDocStorage.signedUrl(d.storagePath,invoiceDocDisplayName(d));
+    const a=document.createElement('a');a.href=url;a.download=invoiceDocDisplayName(d);
+    document.body.appendChild(a);a.click();a.remove();
+  }catch(err){
+    console.error('Document download failed:',err);
+    showToast('Could not download document: '+(err.message||err));
+  }
+}
+function deleteInvoiceDoc(docId){
+  const d=invoiceDocuments.find(x=>x._id===docId);
+  if(!d)return;
+  if(!confirm(`Delete "${invoiceDocDisplayName(d)}"? This removes it for all users and cannot be undone.`))return;
+  // Metadata first: the record is the UI's source of truth on every device, and its
+  // tombstone guarantees it can never resurrect. The storage object removal is
+  // best-effort — a failure only leaves an invisible orphaned file, never a listed
+  // document whose View/Download would 404.
+  invoiceDocuments=invoiceDocuments.filter(x=>x._id!==docId);
+  saveAll();
+  if(window.vatDocStorage&&window.vatDocStorage.ready())window.vatDocStorage.remove(d.storagePath).catch(err=>console.warn('Document object cleanup skipped:',err&&err.message));
+  refreshDocsSections(d.txnId);
+  showToast('Document deleted for all users.');
+}
 function workingDetailTable(g){
   if(!g.txns.length)return '<div class="empty-state" style="padding:16px">No purchase transaction rows for this CV.</div>';
   const vatInputClass=isBalanced(g.vatDiff)?'money-input':'money-input ledger-alert-input';
@@ -1636,6 +1810,7 @@ function workingDetailTable(g){
         </div>
       </div>
     </div>
+    ${documentsSection(t)}
   </div>`}).join('');
   return `<div class="verification-card-list">${cards}</div>`;
 }
@@ -1742,7 +1917,18 @@ function saveWorkingRow(id,opts={}){
   notify((master&&!manualOverride)?'Verification saved with Supplier Master details.':'Verification saved.');
   return true
 }
-function removeTransaction(id){transactions=transactions.filter(t=>t._id!==id);saveAll();renderAll();showToast('Transaction removed.')}
+function removeTransaction(id){
+  // Cascade: a removed transaction takes its supporting documents with it (metadata
+  // syncs/tombstones normally; storage object removal is best-effort cleanup).
+  const docs=invoiceDocuments.filter(d=>d.txnId===id);
+  transactions=transactions.filter(t=>t._id!==id);
+  if(docs.length){
+    invoiceDocuments=invoiceDocuments.filter(d=>d.txnId!==id);
+    if(window.vatDocStorage&&window.vatDocStorage.ready())window.vatDocStorage.remove(docs.map(d=>d.storagePath)).catch(err=>console.warn('Document object cleanup skipped:',err&&err.message));
+  }
+  saveAll();renderAll();
+  showToast('Transaction removed.'+(docs.length?' '+docs.length+' attached document(s) deleted.':''));
+}
 function ledgerRowsByCV(type){const rows=type==='vat'?visibleVatLedgerForMonth():visibleEwtLedgerForMonth();const groups=buildCVGroups();const byCv=new Map(groups.map(g=>[g.cv,g]));const search=(document.getElementById(type+'Search')?.value||'').toLowerCase();const filter=(document.getElementById(type+'BalanceFilter')?.value||'');const map=new Map();rows.forEach(r=>{const cv=r.cv||'(No CV Number)';if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const g=map.get(cv);g.rows.push(r);g.ledgerAmount+=r.amount});byCv.forEach((g,cv)=>{if(!map.has(cv))map.set(cv,{cv,rows:[],ledgerAmount:0,purchaseAmount:0,diff:0});const item=map.get(cv);item.purchaseAmount=type==='vat'?g.bookVat:g.bookEwt;item.diff=item.purchaseAmount-item.ledgerAmount});let result=[...map.values()];result.forEach(item=>{item.diff=item.purchaseAmount-item.ledgerAmount;item.suppliers=compactList(item.rows.map(r=>r.supplier).concat((byCv.get(item.cv)?.txns||[]).map(t=>t.voucherName||t.supplier)));item.status=isBalanced(item.diff)?'balanced':'unbalanced'});if(search)result=result.filter(item=>String(item.cv).toLowerCase().includes(search)||String(item.suppliers).toLowerCase().includes(search)||item.rows.some(r=>ledgerSearchMatch(r,search)));if(filter)result=result.filter(item=>item.status===filter);return result.sort((a,b)=>String(a.cv).localeCompare(String(b.cv)))}
 // ---- Ledger transaction management (VAT / EWT Balances) ----
 // Expansion state per ledger type; persists across renders so an open CV stays open.
