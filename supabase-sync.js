@@ -1,5 +1,5 @@
 /* =====================================================================
- * Centralized Supabase integration for the VAT Compliance Dashboard.
+ * Centralized Supabase integration for the Purchase Compliance Dashboard.
  *
  * Single source of truth: ONE shared company dataset. Every signed-in
  * user reads and writes the SAME rows. Each change is written per-record

@@ -1,4 +1,4 @@
-# VAT Compliance Purchase Dashboard
+# Purchase Compliance Dashboard
 
 This folder is the modular version of the former single-file dashboard.
 
