@@ -1,5 +1,5 @@
 /* =============================================================================
- *  VAT COMPLIANCE DASHBOARD — DATABASE / CLOUD CONFIGURATION
+ *  PURCHASE COMPLIANCE DASHBOARD — DATABASE / CLOUD CONFIGURATION
  *  -----------------------------------------------------------------------------
  *  THIS IS THE ONLY FILE IT NEEDS TO EDIT TO REPOINT THE DASHBOARD AT A
  *  DIFFERENT DATABASE. Do NOT put connection details anywhere else, and do NOT
