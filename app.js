@@ -922,11 +922,13 @@ function renderSummary(){
   const adjustingStats=summaryStatusStats(tx,'adjusting');
   const totalAmount=tx.reduce((a,t)=>a+t.total,0);
   const vatAmount=tx.reduce((a,t)=>a+t.vat,0);
+  const cov=documentCoverageStats(tx,invoiceDocuments);
+  const covClass=!cov.totalLines?'':(cov.coveragePct>=100?'ok':(cov.coveragePct>0?'':'warn'));
   const countToggle=document.getElementById('summaryCountToggle');
   const amountToggle=document.getElementById('summaryAmountToggle');
   if(countToggle)countToggle.classList.toggle('active',summaryViewMode!=='amount');
   if(amountToggle)amountToggle.classList.toggle('active',summaryViewMode==='amount');
-  document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}${summaryMetricCard('journal','Journal Entry','journal',journalStats,total,vatAmount)}${summaryMetricCard('adjusting','Adjusting Entry','adjusting',adjustingStats,total,vatAmount)}<div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
+  document.getElementById('summaryMetrics').innerHTML=`<div class="metric"><div class="metric-label">${mode==='supplier'?'Suppliers':mode==='cv'?'CV Numbers':mode==='voucher'?'Vouchers':'Groups'}</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${total} purchase transactions</div></div>${summaryMetricCard('ok','Compliant','ok',okStats,total,vatAmount)}${summaryMetricCard('warn','Without Invoice','warn',warnStats,total,vatAmount)}${summaryMetricCard('err','Non-Compliant','err',errStats,total,vatAmount)}${summaryMetricCard('unreviewed','Unreviewed','review',unrevStats,total,vatAmount)}${summaryMetricCard('journal','Journal Entry','journal',journalStats,total,vatAmount)}${summaryMetricCard('adjusting','Adjusting Entry','adjusting',adjustingStats,total,vatAmount)}<div class="metric ${covClass}"><div class="metric-label">Document Coverage</div><div class="metric-value summary-pct-value">${cov.coveragePct}%</div><div class="metric-sub">${cov.withDocs}/${cov.totalLines} lines · ${cov.totalFiles} file(s)</div></div><div class="metric"><div class="metric-label">Total / VAT</div><div class="metric-value" style="font-size:16px">${peso(totalAmount)}</div><div class="metric-sub">VAT ${peso(vatAmount)}</div></div>`;
   const labels=summaryLabels(mode);
   const supplierFirst=mode==='supplier';
   const firstHeader=summarySortHeader('first',labels.first,'17%');
@@ -1675,17 +1677,20 @@ function renderDocTrackerMetrics(){
  * text-based PDFs are read via pdf.js getTextContent() (no OCR); scanned PDFs and
  * images are OCR'd via tesseract.js (WASM) in the browser. No document bytes are ever
  * sent to an external OCR provider (only the OCR engine assets are fetched, and can be
- * self-hosted). Extracted text is transient and never saved. OCR results are SUGGESTIONS
- * only: the user reviews candidate TINs with surrounding context and explicitly confirms
- * before anything is written; a non-empty TIN is never overwritten without confirmation. */
+ * self-hosted). Extracted text is transient and never saved. OCR is a SUGGESTION, not
+ * verified tax data, and never changes the verification status.
+ *
+ * The supplier TIN is AUTO-SELECTED (no manual picker): the candidate nearest a
+ * "VAT Reg TIN" / "Non-VAT Reg TIN" label wins, then any TIN-labelled number, then the
+ * first plausible number. The company's own TIN is always excluded so the buyer's TIN
+ * is never chosen. An existing, different TIN is still confirmed before being replaced. */
 const OCR_LIBS={
   tesseract:'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
   pdfjs:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js',
   pdfWorker:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js'
 };
-const OCR_MAX_PDF_OCR_PAGES=5;    // OCR is CPU-heavy: cap scanned-PDF OCR to the first N pages
+const OCR_MAX_PDF_OCR_PAGES=3;    // OCR is CPU-heavy: cap scanned-PDF OCR to the first N pages
 const OCR_MAX_PDF_TEXT_PAGES=20;  // cheap text-layer extraction cap for very long PDFs
-let _tinScanState={txnId:null,docId:null,candidates:[]};
 let _ocrLibsPromise=null;
 function loadExternalScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.onload=()=>resolve();s.onerror=()=>reject(new Error('Failed to load '+src));document.head.appendChild(s)})}
 async function ensureOcrLibs(){
@@ -1700,18 +1705,25 @@ async function ensureOcrLibs(){
   return _ocrLibsPromise;
 }
 // PURE + TESTABLE: find Philippine TIN candidates in free text. Self-contained (no app
-// deps). Returns [{normalized, digits, context, nearLabel}], deduped by digits, with
-// TIN-labelled matches ranked first. A candidate is a 9-, 12-, or 14-digit number
-// (base 9 + optional 3/5-digit branch). Never auto-selects; caller shows all for review.
-function extractTinCandidates(text){
+// deps). Returns [{normalized, digits, context, labelType}] ranked best-first for
+// auto-selection: 'vatreg' (near a "VAT Reg TIN"/"Non-VAT Reg TIN" label) > 'tin'
+// (near a generic TIN/Tax ID label) > 'none', ties broken by document order. A candidate
+// is a 9-, 12-, or 14-digit number (base 9 + optional 3/5-digit branch). `excludeBase`
+// is a 9-digit base whose matches are dropped entirely (used to exclude the company TIN).
+function extractTinCandidates(text,excludeBase){
   const src=String(text||'');
   if(!src)return [];
+  const exclude=String(excludeBase||'').replace(/\D/g,'').slice(0,9);
+  const rank=lt=>lt==='vatreg'?2:(lt==='tin'?1:0);
   const found=new Map();
   const add=(matchText,index)=>{
     const digits=String(matchText).replace(/\D/g,'');
     if(!(digits.length===9||digits.length===12||digits.length===14))return;
-    const before=src.slice(Math.max(0,index-24),index);
-    const nearLabel=/tin\b|t\.?\s*i\.?\s*n\.?|tax\s*id/i.test(before);
+    if(exclude&&digits.slice(0,9)===exclude)return; // never the company's own (buyer) TIN
+    const before=src.slice(Math.max(0,index-40),index).toLowerCase();
+    let labelType='none';
+    if(/(non[-\s]*)?vat\s*reg\.?\s*tin/.test(before))labelType='vatreg';
+    else if(/tin\b|t\.?\s*i\.?\s*n\.?|tax\s*id/.test(before))labelType='tin';
     let normalized;
     if(digits.length===9)normalized=`${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}`;
     else if(digits.length===12)normalized=`${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}-${digits.slice(9,12)}`;
@@ -1719,15 +1731,15 @@ function extractTinCandidates(text){
     const ctxStart=Math.max(0,index-35),ctxEnd=Math.min(src.length,index+String(matchText).length+35);
     const context=src.slice(ctxStart,ctxEnd).replace(/\s+/g,' ').trim();
     const existing=found.get(digits);
-    if(existing){if(nearLabel&&!existing.nearLabel){existing.nearLabel=true;existing.context=context}return}
-    found.set(digits,{normalized,digits,context,nearLabel});
+    if(existing){if(rank(labelType)>rank(existing.labelType)){existing.labelType=labelType;existing.context=context}return}
+    found.set(digits,{normalized,digits,context,labelType,index});
   };
   let m;
   const grouped=/\d{3}[-\s.]\d{3}[-\s.]\d{3}(?:[-\s.]\d{3,5})?/g;
   while((m=grouped.exec(src)))add(m[0],m.index);
   const bare=/\d{9,14}/g;
   while((m=bare.exec(src))){const d=m[0].replace(/\D/g,'');if(d.length===9||d.length===12||d.length===14)add(m[0],m.index)}
-  return [...found.values()].sort((a,b)=>(b.nearLabel?1:0)-(a.nearLabel?1:0));
+  return [...found.values()].sort((a,b)=>rank(b.labelType)-rank(a.labelType)||a.index-b.index);
 }
 async function fetchDocBlob(d){
   const url=await window.vatDocStorage.signedUrl(d.storagePath);
@@ -1777,53 +1789,33 @@ async function scanDocForTin(docId){
     let text='';
     if(d.ext==='pdf'){text=await extractTextFromPdf(await blob.arrayBuffer())}
     else{text=await ocrRecognize(blob)}
-    const candidates=extractTinCandidates(text);
-    if(!candidates.length){showToast('No TIN candidate found.');return}
-    _tinScanState={txnId:t._id,docId:d._id,candidates};
-    openTinScanModal(d,t,candidates);
+    // Auto-select: exclude the company's own TIN, then take the best-ranked candidate
+    // (nearest a "VAT Reg TIN"/"Non-VAT Reg TIN" label first). No manual picker.
+    const candidates=extractTinCandidates(text,normalizeTIN(COMPANY_PROFILE.tin));
+    const best=candidates[0];
+    if(!best){showToast('No TIN candidate found.');return}
+    applyScannedTin(best,t._id);
   }catch(err){console.error('TIN scan failed:',err);showToast('Scan failed: '+(err.message||err))}
 }
-function openTinScanModal(d,t,candidates){
-  const modal=document.getElementById('tinScanModal'),body=document.getElementById('tinScanBody');
-  if(!modal||!body)return;
-  const curTin=t.tin?`<div class="tin-scan-note">This line already has TIN <strong>${esc(t.tin)}</strong>. Choosing a candidate will ask you to confirm before replacing it.</div>`:'';
-  // Candidate values are NOT interpolated into inline handlers — buttons carry only an
-  // index and are dispatched through delegated handleTinScanClick(). esc() guards text.
-  const rows=candidates.map((c,i)=>`<div class="tin-candidate"><div class="tin-candidate-main"><span class="tin-candidate-value mono">${esc(c.normalized)}</span>${c.nearLabel?'<span class="badge badge-ok">near “TIN” label</span>':''}</div><div class="tin-candidate-context">…${esc(c.context)}…</div><div class="tin-candidate-actions"><button type="button" class="btn btn-small btn-primary" data-tin-index="${i}">Use this TIN</button></div></div>`).join('');
-  body.innerHTML=`<div class="tin-scan-intro">Reviewed entirely on your device — nothing was uploaded to an external service. OCR results are <strong>suggestions</strong>, not verified tax data. Select the correct TIN for <strong>${esc(invoiceDocDisplayName(d))}</strong>.</div>${curTin}<div class="tin-candidate-list">${rows}</div>`;
-  modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
-}
-function closeTinScanModal(){
-  const modal=document.getElementById('tinScanModal');
-  if(modal){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true')}
-  const body=document.getElementById('tinScanBody');if(body)body.innerHTML='';
-  _tinScanState={txnId:null,docId:null,candidates:[]};
-}
-function confirmTinCandidate(index){
-  const st=_tinScanState,c=st.candidates[index];
-  if(!c)return;
-  const idx=transactions.findIndex(x=>x._id===st.txnId);
-  if(idx<0){showToast('Transaction line no longer exists.');closeTinScanModal();return}
-  if(normalizeTIN(c.normalized).length<9){showToast('That candidate is not a valid TIN.');return}
+function applyScannedTin(candidate,txnId){
+  const idx=transactions.findIndex(x=>x._id===txnId);
+  if(idx<0){showToast('Transaction line no longer exists.');return}
+  if(normalizeTIN(candidate.normalized).length<9){showToast('No valid TIN candidate found.');return}
   const cur=transactions[idx];
-  const curDigits=normalizeTIN(cur.tin),newDigits=normalizeTIN(c.normalized);
-  if(curDigits&&curDigits===newDigits){showToast('This line already has that TIN.');closeTinScanModal();return}
-  if(curDigits&&curDigits!==newDigits){ if(!confirm(`This line already has TIN ${cur.tin}. Replace it with ${c.normalized}?`))return; }
+  const curDigits=normalizeTIN(cur.tin),newDigits=normalizeTIN(candidate.normalized);
+  if(curDigits&&curDigits===newDigits){showToast(`TIN already set to ${cur.tin}.`);return}
+  // Safety: an existing, different TIN is not overwritten silently.
+  if(curDigits&&curDigits!==newDigits){ if(!confirm(`This line already has TIN ${cur.tin}. Replace it with the scanned ${candidate.normalized}?`))return; }
   // Write through the SAME path as manual entry: normalize, then Supplier Master lookup,
-  // then persist via saveAll()/cloud-sync. Never marks compliance — status is untouched.
-  let updated=normalizeTransaction({...cur,tin:c.normalized});
+  // then persist via saveAll()/cloud-sync. Verification status is never touched.
+  let updated=normalizeTransaction({...cur,tin:candidate.normalized});
   const master=(!updated.supplierManualOverride)?findSupplierByTIN(updated.tin):null;
   if(master)updated=applySupplierToTransaction(updated,master);
   transactions[idx]=updated;
   saveAll();
   renderAll();
-  closeTinScanModal();
-  showToast(master?`TIN ${c.normalized} set and matched to Supplier Master.`:`TIN ${c.normalized} set. No Supplier Master match yet.`);
-}
-function handleTinScanClick(e){
-  if(e.target.id==='tinScanModal'||e.target.closest('[data-close-tin-scan]')){closeTinScanModal();return}
-  const btn=e.target.closest('[data-tin-index]');
-  if(btn){const i=Number(btn.getAttribute('data-tin-index'));if(Number.isInteger(i))confirmTinCandidate(i)}
+  const near=candidate.labelType==='vatreg'?' (found near a “VAT Reg TIN” label)':'';
+  showToast(master?`TIN ${candidate.normalized} set${near} and matched to Supplier Master.`:`TIN ${candidate.normalized} set${near}. No Supplier Master match yet.`);
 }
 function docStorageReady(){if(window.vatDocStorage&&window.vatDocStorage.ready())return true;showToast('Log in to the shared cloud before working with documents.');return false}
 function startDocUpload(txnId){
@@ -3162,7 +3154,6 @@ document.getElementById('cvReviewModal').addEventListener('click',e=>{if(e.targe
 document.getElementById('cvReviewModal').addEventListener('input',handleVerificationInput);
 document.getElementById('cvReviewModal').addEventListener('change',handleVerificationChange);
 document.getElementById('cvReviewModal').addEventListener('focusout',handleVerificationFocusOut);
-document.getElementById('tinScanModal').addEventListener('click',handleTinScanClick);
 const dz=document.getElementById('dropZone');dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');const f=e.dataTransfer.files[0];if(f){const inp=document.getElementById('xlsxInput');const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;handleXLSX({target:inp})}});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){const tinModal=document.getElementById('tinScanModal');if(tinModal&&tinModal.classList.contains('visible')){closeTinScanModal();return}if(activeSummaryReview){closeSummaryReviewModal();return}if(focusedCV){closeCVReviewModal();}}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(activeSummaryReview){closeSummaryReviewModal();return}if(focusedCV){closeCVReviewModal();}}});
 updateImportHelp();updateTaxPreview('f');renderAll();
