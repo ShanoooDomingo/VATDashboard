@@ -1096,24 +1096,31 @@ table.audit-table td{vertical-align:top}
 .cloud-popover{z-index:500!important;}
 
 /* ---- Supporting documents (invoice document management, CV review popup) ----
-   Lives inside the Verification card, below the Status dropdown and Notes. Uses the
-   shared design tokens so it inherits the dashboard's look; a dashed divider sets it
-   off from the fields above it. Kept compact so it fits the narrow card column. */
+   Lives inside the Verification card, below the Status dropdown and Notes. Deliberately
+   compact — one line per document (name = View; small download + "×" delete on the
+   right) — so CVs with many transaction lines stay manageable. Full metadata is in each
+   row's hover tooltip rather than a second visible line. */
 .docs-section{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}
-.docs-section-title{font-size:9px;font-weight:900;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px}
-.doc-list{display:flex;flex-direction:column;gap:5px;margin:4px 0 7px}
-.doc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)}
-.doc-row svg{width:15px;height:15px;flex:0 0 auto;color:var(--text3)}
-.doc-info{min-width:0;flex:1 1 140px}
-.doc-name{font-size:11px;font-weight:600;color:var(--text);word-break:break-all}
-.doc-meta{font-size:10px;color:var(--text3);word-break:break-word;line-height:1.3}
-.doc-row-actions{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap}
-.doc-row.uploading{opacity:.65}
-.doc-row.uploading .doc-meta{color:var(--accent)}
-.doc-empty{font-size:10.5px;color:var(--text3);padding:2px 0 6px;text-align:left}
-.doc-actions-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.doc-hint{font-size:10px;color:var(--text3)}
+.docs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.docs-section-title{font-size:9px;font-weight:900;color:var(--text3);text-transform:uppercase;letter-spacing:.07em}
 .doc-count{font-weight:500;color:var(--text3)}
+.doc-upload-btn{padding:2px 9px!important}
+.doc-list{display:flex;flex-direction:column;gap:3px}
+.doc-row{display:flex;align-items:center;gap:4px;min-width:0}
+.doc-name-btn{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;cursor:pointer;text-align:left;font:inherit;color:var(--text)}
+.doc-name-btn:hover{border-color:var(--accent);color:var(--accent)}
+.doc-name-btn[aria-disabled="true"]{cursor:default;opacity:.7}
+.doc-name-btn svg{width:14px;height:14px;flex:0 0 auto;color:var(--text3)}
+.doc-name-btn:hover svg{color:var(--accent)}
+.doc-name{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-icon-btn,.doc-x-btn{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text3);cursor:pointer}
+.doc-icon-btn svg{width:13px;height:13px}
+.doc-icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+.doc-x-btn{font-size:15px;line-height:1;font-weight:700}
+.doc-x-btn:hover{border-color:var(--err-border);color:var(--err);background:var(--err-bg)}
+.doc-row.uploading{opacity:.7}
+.doc-uploading-tag{font-size:10px;color:var(--accent);white-space:nowrap;flex:0 0 auto}
+.doc-empty{font-size:10px;color:var(--text3)}
 
 /* ---- Supporting-document coverage tracker (Purchase Transactions tab) ----
    A compact sub-row under the main metrics; its own grid so the three cards
