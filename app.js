@@ -1626,13 +1626,20 @@ function validateDocFile(f){const ext=String(f.name.split('.').pop()||'').toLowe
 function documentsSection(t){
   const docs=docsForTransaction(t._id);
   const pending=[...pendingDocUploads.values()].filter(p=>p.txnId===t._id);
-  const docRows=docs.map(d=>`<div class="doc-row" data-doc-id="${attr(d._id)}">${docFileIconSvg(d.ext)}<div class="doc-info"><div class="doc-name">${esc(invoiceDocDisplayName(d))}</div><div class="doc-meta">${esc(d.originalName||'')}${d.fileSize?' · '+esc(formatFileSize(d.fileSize)):''}${d.uploadedByName?' · Uploaded by '+esc(d.uploadedByName):''}${docUploadDateText(d.uploadedAt)?' · '+esc(docUploadDateText(d.uploadedAt)):''}</div></div><div class="doc-row-actions action-buttons"><button type="button" class="btn btn-small" onclick="viewInvoiceDoc('${attr(d._id)}')">View</button><button type="button" class="btn btn-small" onclick="downloadInvoiceDoc('${attr(d._id)}')">Download</button><button type="button" class="btn btn-small" onclick="scanDocForTin('${attr(d._id)}')">Scan for TIN</button><button type="button" class="btn btn-small" onclick="startDocReplace('${attr(d._id)}')">Replace</button><button type="button" class="btn btn-small btn-danger" onclick="deleteInvoiceDoc('${attr(d._id)}')">Delete</button></div></div>`).join('');
-  const pendingRows=pending.map(p=>`<div class="doc-row uploading">${docFileIconSvg('')}<div class="doc-info"><div class="doc-name">${esc(p.fileName)}</div><div class="doc-meta">Uploading to shared cloud…</div></div></div>`).join('');
-  const list=(docRows||pendingRows)?docRows+pendingRows:'<div class="empty-state doc-empty">No supporting documents uploaded.</div>';
+  // Compact single-line rows to keep CVs with many transaction lines manageable:
+  // click the name to VIEW; full metadata lives in the row's tooltip; a small download
+  // icon and a small "×" delete sit on the right. (No Scan/Replace buttons — supplier
+  // TIN detection is autonomous on upload.)
+  const dl='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  const docRows=docs.map(d=>{
+    const meta=[d.originalName||'',d.fileSize?formatFileSize(d.fileSize):'',d.uploadedByName?'by '+d.uploadedByName:'',docUploadDateText(d.uploadedAt)].filter(Boolean).join(' · ');
+    return `<div class="doc-row" data-doc-id="${attr(d._id)}"><button type="button" class="doc-name-btn" onclick="viewInvoiceDoc('${attr(d._id)}')" title="View — ${attr(meta)}">${docFileIconSvg(d.ext)}<span class="doc-name">${esc(invoiceDocDisplayName(d))}</span></button><button type="button" class="doc-icon-btn" onclick="downloadInvoiceDoc('${attr(d._id)}')" aria-label="Download" title="Download">${dl}</button><button type="button" class="doc-x-btn" onclick="deleteInvoiceDoc('${attr(d._id)}')" aria-label="Delete document" title="Delete document">×</button></div>`;
+  }).join('');
+  const pendingRows=pending.map(p=>`<div class="doc-row uploading"><span class="doc-name-btn" aria-disabled="true">${docFileIconSvg('')}<span class="doc-name">${esc(p.fileName)}</span></span><span class="doc-uploading-tag">Uploading…</span></div>`).join('');
+  const list=(docRows||pendingRows)?docRows+pendingRows:'<span class="doc-empty">No documents.</span>';
   return `<div class="docs-section" data-docs-txn="${attr(t._id)}">
-    <div class="docs-section-title">Supporting documents <span class="doc-count">(${docs.length})</span></div>
+    <div class="docs-head"><span class="docs-section-title">Documents <span class="doc-count">(${docs.length})</span></span><button type="button" class="btn btn-small doc-upload-btn" onclick="startDocUpload('${attr(t._id)}')" title="Upload PDF, JPG, or PNG · max 10 MB · shared with all users">+ Upload</button></div>
     <div class="doc-list">${list}</div>
-    <div class="doc-actions-row"><button type="button" class="btn btn-small" onclick="startDocUpload('${attr(t._id)}')">Upload document</button><span class="doc-hint">PDF, JPG, PNG · max 10 MB · shared with all users</span></div>
   </div>`;
 }
 // In-place refresh of just the documents block, so upload/delete feedback appears even
@@ -1741,12 +1748,6 @@ function extractTinCandidates(text,excludeBase){
   while((m=bare.exec(src))){const d=m[0].replace(/\D/g,'');if(d.length===9||d.length===12||d.length===14)add(m[0],m.index)}
   return [...found.values()].sort((a,b)=>rank(b.labelType)-rank(a.labelType)||a.index-b.index);
 }
-async function fetchDocBlob(d){
-  const url=await window.vatDocStorage.signedUrl(d.storagePath);
-  const res=await fetch(url);
-  if(!res.ok)throw new Error('Could not fetch the document ('+res.status+')');
-  return await res.blob();
-}
 async function ocrRecognize(image){
   const worker=await window.Tesseract.createWorker('eng');
   try{const {data}=await worker.recognize(image);return (data&&data.text)||''}
@@ -1776,71 +1777,54 @@ async function extractTextFromPdf(arrayBuffer){
   }finally{try{await worker.terminate()}catch(e){}}
   return ocrText;
 }
-async function scanDocForTin(docId){
-  const d=invoiceDocuments.find(x=>x._id===docId);
-  if(!d){showToast('Document record not found.');return}
-  if(!docStorageReady())return;
-  const t=transactions.find(x=>x._id===d.txnId);
-  if(!t){showToast('This document is not linked to a transaction line.');return}
-  showToast('Scanning on your device… the first run downloads the OCR engine.');
+// Autonomous supplier-TIN detection. Runs (fire-and-forget) right after a document is
+// uploaded to a line that has NO TIN yet — there is no button and no picker. It reads the
+// uploaded file locally, picks the most-likely supplier TIN (best-ranked candidate:
+// nearest a "VAT Reg TIN"/"Non-VAT Reg TIN" label first) with the company's own TIN
+// excluded, and fills it in. If the line already has a TIN it does nothing; an existing
+// TIN is never overwritten. Verification status is never changed. Errors stay silent.
+const _autoTinAttempted=new Set();
+async function autoDetectTinFromFile(file,ext,txnId){
+  if(_autoTinAttempted.has(txnId))return;      // one attempt per line per session
+  const before=transactions.find(x=>x._id===txnId);
+  if(!before||normalizeTIN(before.tin))return; // already has a TIN -> do nothing
+  _autoTinAttempted.add(txnId);
   try{
     await ensureOcrLibs();
-    const blob=await fetchDocBlob(d);
     let text='';
-    if(d.ext==='pdf'){text=await extractTextFromPdf(await blob.arrayBuffer())}
-    else{text=await ocrRecognize(blob)}
-    // Auto-select: exclude the company's own TIN, then take the best-ranked candidate
-    // (nearest a "VAT Reg TIN"/"Non-VAT Reg TIN" label first). No manual picker.
-    const candidates=extractTinCandidates(text,normalizeTIN(COMPANY_PROFILE.tin));
-    const best=candidates[0];
-    if(!best){showToast('No TIN candidate found.');return}
-    applyScannedTin(best,t._id);
-  }catch(err){console.error('TIN scan failed:',err);showToast('Scan failed: '+(err.message||err))}
-}
-function applyScannedTin(candidate,txnId){
-  const idx=transactions.findIndex(x=>x._id===txnId);
-  if(idx<0){showToast('Transaction line no longer exists.');return}
-  if(normalizeTIN(candidate.normalized).length<9){showToast('No valid TIN candidate found.');return}
-  const cur=transactions[idx];
-  const curDigits=normalizeTIN(cur.tin),newDigits=normalizeTIN(candidate.normalized);
-  if(curDigits&&curDigits===newDigits){showToast(`TIN already set to ${cur.tin}.`);return}
-  // Safety: an existing, different TIN is not overwritten silently.
-  if(curDigits&&curDigits!==newDigits){ if(!confirm(`This line already has TIN ${cur.tin}. Replace it with the scanned ${candidate.normalized}?`))return; }
-  // Write through the SAME path as manual entry: normalize, then Supplier Master lookup,
-  // then persist via saveAll()/cloud-sync. Verification status is never touched.
-  let updated=normalizeTransaction({...cur,tin:candidate.normalized});
-  const master=(!updated.supplierManualOverride)?findSupplierByTIN(updated.tin):null;
-  if(master)updated=applySupplierToTransaction(updated,master);
-  transactions[idx]=updated;
-  saveAll();
-  renderAll();
-  const near=candidate.labelType==='vatreg'?' (found near a “VAT Reg TIN” label)':'';
-  showToast(master?`TIN ${candidate.normalized} set${near} and matched to Supplier Master.`:`TIN ${candidate.normalized} set${near}. No Supplier Master match yet.`);
+    if(ext==='pdf')text=await extractTextFromPdf(await file.arrayBuffer());
+    else text=await ocrRecognize(file);
+    const best=extractTinCandidates(text,normalizeTIN(COMPANY_PROFILE.tin))[0];
+    if(!best||normalizeTIN(best.normalized).length<9)return;
+    // Re-check after the async OCR gap: line still exists and STILL has no TIN.
+    const idx=transactions.findIndex(x=>x._id===txnId);
+    if(idx<0||normalizeTIN(transactions[idx].tin))return;
+    // Same path as manual entry: normalize, then Supplier Master lookup, then persist.
+    let updated=normalizeTransaction({...transactions[idx],tin:best.normalized});
+    const master=(!updated.supplierManualOverride)?findSupplierByTIN(updated.tin):null;
+    if(master)updated=applySupplierToTransaction(updated,master);
+    transactions[idx]=updated;
+    saveAll();
+    renderAll();
+    showToast(master?`Supplier TIN ${best.normalized} auto-detected and matched to Supplier Master.`:`Supplier TIN ${best.normalized} auto-detected from the document.`);
+  }catch(err){console.warn('Auto TIN detection skipped:',err&&err.message)}
 }
 function docStorageReady(){if(window.vatDocStorage&&window.vatDocStorage.ready())return true;showToast('Log in to the shared cloud before working with documents.');return false}
 function startDocUpload(txnId){
   if(!docStorageReady())return;
   const inp=document.getElementById('docFileInput');if(!inp)return;
-  docUploadTarget={mode:'new',txnId};
+  docUploadTarget=txnId;
   inp.multiple=true;inp.value='';inp.click();
 }
-function startDocReplace(docId){
-  if(!docStorageReady())return;
-  const inp=document.getElementById('docFileInput');if(!inp)return;
-  docUploadTarget={mode:'replace',docId};
-  inp.multiple=false;inp.value='';inp.click();
-}
 async function handleDocFileInput(e){
-  const target=docUploadTarget;docUploadTarget=null;
+  const txnId=docUploadTarget;docUploadTarget=null;
   const files=[...(e.target.files||[])];e.target.value='';
-  if(!target||!files.length)return;
+  if(!txnId||!files.length)return;
   if(!docStorageReady())return;
+  if(!transactions.some(t=>t._id===txnId)){showToast('Transaction not found.');return}
   const valid=[];
   for(const f of files){const v=validateDocFile(f);if(!v.ok){showToast(v.msg);continue}valid.push({file:f,ext:v.ext})}
   if(!valid.length)return;
-  if(target.mode==='replace'){await replaceInvoiceDocFile(target.docId,valid[0]);return}
-  const txnId=target.txnId;
-  if(!transactions.some(t=>t._id===txnId)){showToast('Transaction not found.');return}
   for(const {file,ext} of valid){
     const docId=makeId('doc');
     // Storage path is built ONLY from generated ids + sanitized extension (never from
@@ -1858,6 +1842,8 @@ async function handleDocFileInput(e){
       invoiceDocuments.push(normalizeInvoiceDocument({_id:docId,txnId,originalName:file.name,ext,mimeType:file.type||DOC_ALLOWED_EXT[ext],fileSize:file.size,storagePath:path,uploadedAt:new Date().toISOString(),uploadedBy:u.id,uploadedByName:u.name}));
       saveAll();
       showToast(`"${file.name}" uploaded and shared with all users.`);
+      // Autonomous supplier-TIN detection (only fills a line that has no TIN yet).
+      autoDetectTinFromFile(file,ext,txnId);
     }catch(err){
       console.error('Document upload failed:',err);
       showToast(`Upload failed for "${file.name}": ${err.message||err}`);
@@ -1865,33 +1851,6 @@ async function handleDocFileInput(e){
       pendingDocUploads.delete(uploadKey);
       refreshDocsSections(txnId);
     }
-  }
-}
-async function replaceInvoiceDocFile(docId,picked){
-  const d=invoiceDocuments.find(x=>x._id===docId);
-  if(!d){showToast('Document record not found.');return}
-  const {file,ext}=picked;
-  const oldPath=d.storagePath;
-  // Never overwrite the old object in place: upload to a fresh path, switch the
-  // record over, then clean up the old object best-effort. A concurrent viewer keeps
-  // a working file at every moment, and a failed upload leaves the record untouched.
-  const newPath=`txn/${d.txnId}/${d._id}_${Date.now().toString(36)}.${ext}`;
-  pendingDocUploads.set(docId,{txnId:d.txnId,fileName:file.name});
-  refreshDocsSections(d.txnId);
-  try{
-    await window.vatDocStorage.upload(newPath,file);
-    const u=window.vatDocStorage.user();
-    d.originalName=file.name;d.ext=ext;d.mimeType=file.type||DOC_ALLOWED_EXT[ext];d.fileSize=file.size;
-    d.storagePath=newPath;d.uploadedAt=new Date().toISOString();d.uploadedBy=u.id;d.uploadedByName=u.name;
-    saveAll();
-    if(oldPath&&oldPath!==newPath)window.vatDocStorage.remove(oldPath).catch(err=>console.warn('Old document object cleanup skipped:',err&&err.message));
-    showToast(`Document replaced with "${file.name}".`);
-  }catch(err){
-    console.error('Document replace failed:',err);
-    showToast(`Replace failed for "${file.name}": ${err.message||err}`);
-  }finally{
-    pendingDocUploads.delete(docId);
-    refreshDocsSections(d.txnId);
   }
 }
 async function viewInvoiceDoc(docId){
