@@ -66,3 +66,35 @@ How it works:
 One-time setup: run `supabase-setup-invoice-documents.sql` in the Supabase dashboard SQL Editor **before** deploying the updated files (it creates the table, realtime publication, private bucket, and access policies). Optional overrides in `supabase-config.js`: `tables:{ invoiceDocuments:'...' }` and `storageBucket:'...'`.
 
 Caveat: re-importing transactions with "Replace existing data" assigns new record ids, so documents attached to the replaced rows become unlinked (they stop appearing but stay in storage).
+
+## Security
+
+What the app enforces:
+
+- **Invitation-only accounts.** The login page has no "Create account" control and the browser `signUp()` path is disabled. Enforce this authoritatively in Supabase: **Authentication → Sign In / Providers → turn OFF "Allow new users to sign up."** Existing users keep logging in; the Email provider stays enabled.
+- **Private document storage.** Files live in a private bucket and are only ever reached through **short-lived signed URLs** (120 s TTL); there are no public links. View/download tabs use `noopener`.
+- **Upload validation.** Every upload is checked for **extension, size (≤10 MB), and content signature (magic bytes)** — a file whose bytes are not a real PDF/JPEG/PNG is rejected even if renamed or given a fake MIME type.
+- **Record-id hardening (XSS).** All record ids are validated to `[A-Za-z0-9_-]` on load (`safeId`), so a crafted shared-cloud `record_id` cannot break out of an HTML attribute or inline handler. Document actions use event delegation (`data-*`), not interpolated ids.
+- **Logout hygiene.** Logout purges the local dataset cache, sync bookkeeping, and known-cloud-id set from `localStorage`, so a signed-out shared device retains nothing; a fresh login re-pulls from the cloud.
+- **On-device OCR.** Supplier-TIN detection runs entirely in the browser (tesseract.js / pdf.js); tax documents are never sent to an external OCR service. Extracted text is not stored.
+
+Recommended hosting configuration (set as real HTTP response headers at your static host / CDN — a static app can only partially self-enforce these):
+
+```
+Content-Security-Policy: default-src 'self';
+  script-src 'self' 'unsafe-inline' https://cdn.sheetjs.com https://cdn.jsdelivr.net https://unpkg.com;
+  connect-src 'self' https://<your-project-ref>.supabase.co wss://<your-project-ref>.supabase.co https://api.ipify.org https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com;
+  worker-src 'self' blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src 'self' https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+```
+
+Known limitations (searchable as `ponytail:` in the source):
+
+- **`script-src` still needs `'unsafe-inline'`** because the app uses legacy inline `onclick` handlers; the document section has already been migrated to event delegation, and the rest should follow to allow dropping `'unsafe-inline'`.
+- **Third-party libraries load from CDNs without Subresource Integrity**, and tesseract fetches its WASM core + language data from a CDN at runtime. Pin exact versions with `integrity="sha384-…" crossorigin`, or **self-host** the libraries and OCR assets under `/vendor`, to eliminate execution of unverified remote code.
+- **The offline `localStorage` cache is plaintext** while logged in (purged on logout).
+- **The audit trail retains field-level old/new values** (TINs, amounts) and best-effort client IP by design; keep `audit_log` access admin-only and RLS-restricted.

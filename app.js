@@ -36,6 +36,12 @@ let activeSummaryReview=null;
 const openCVs=new Set();
 const MONTH_NAMES=[['Jan','january','jan'],['Feb','february','feb'],['Mar','march','mar'],['Apr','april','apr'],['May','may'],['Jun','june','jun'],['Jul','july','jul'],['Aug','august','aug'],['Sep','september','sept','sep'],['Oct','october','oct'],['Nov','november','nov'],['Dec','december','dec']];
 function makeId(prefix='id'){return prefix+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
+// Record identity is interpolated into HTML attributes and (legacy) inline handlers, so
+// it MUST be a clean token. Every legitimate id is a makeId() value ([A-Za-z0-9_-]); any
+// id outside that shape is corruption or an injection attempt from a crafted shared-cloud
+// record, so we reject it (callers fall back to a fresh makeId). This neutralizes
+// attribute/handler breakout at the data layer, app-wide, regardless of the sink.
+function safeId(v){return /^[A-Za-z0-9_-]{1,64}$/.test(String(v==null?'':v))?String(v):''}
 function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function attr(v){return esc(v)}
 function parseMoney(value){let raw=String(value??'').trim();if(!raw||raw==='-'||raw==='--'||raw.toLowerCase()==='n/a')return 0;let negative=false;if(/^\(.*\)$/.test(raw)){negative=true;raw=raw.slice(1,-1)}raw=raw.replace(/[₱,\s]/g,'');const parsed=parseFloat(raw);if(!Number.isFinite(parsed))return 0;return negative?-parsed:parsed}
@@ -87,7 +93,22 @@ function dateSortNumber(value){
   return null;
 }
 function loadArray(key,fallback){try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(err){}return fallback}
+// ponytail: the offline cache in localStorage is stored in plain text (unavoidable for an
+// offline-capable static app). It is purged on logout (clearLocalDashboardData); a fuller
+// mitigation would require an encrypted store or dropping offline caching.
 function saveAll(){invalidateVisibleCache();try{localStorage.setItem(TX_KEY,JSON.stringify(transactions));localStorage.setItem(VAT_LEDGER_KEY,JSON.stringify(vatLedger));localStorage.setItem(EWT_LEDGER_KEY,JSON.stringify(ewtLedger));localStorage.setItem(SUPPLIER_MASTER_KEY,JSON.stringify(supplierMaster));localStorage.setItem(ATC_MASTER_KEY,JSON.stringify(atcMaster));localStorage.setItem(VAT_CATEGORIES_KEY,JSON.stringify(VAT_CATEGORIES));localStorage.setItem(INVOICE_DOCS_KEY,JSON.stringify(invoiceDocuments))}catch(err){}}
+// Security: the offline cache in localStorage holds the shared business dataset in plain
+// text. On logout we purge it (and in-memory state) so a signed-out shared device does not
+// retain the previous session's transactions, supplier TINs, or document metadata. A fresh
+// login re-pulls the authoritative data from the cloud. Called by the sync layer's logOut.
+function clearLocalDashboardData(){
+  try{[TX_KEY,VAT_LEDGER_KEY,EWT_LEDGER_KEY,SUPPLIER_MASTER_KEY,ATC_MASTER_KEY,VAT_CATEGORIES_KEY,INVOICE_DOCS_KEY].forEach(k=>localStorage.removeItem(k));}catch(e){}
+  transactions=[];vatLedger=[];ewtLedger=[];supplierMaster=[];atcMaster=[];VAT_CATEGORIES=[];invoiceDocuments=[];
+  try{if(typeof _autoTinAttempted!=='undefined')_autoTinAttempted.clear();}catch(e){}
+  invalidateVisibleCache();
+  try{renderAll();}catch(e){}
+}
+window.clearLocalDashboardData=clearLocalDashboardData;
 function parseVerification(value){const v=String(value??'').trim().toLowerCase();if(!v||['unreviewed','for review','not reviewed'].includes(v))return 'unreviewed';if(['ok','compliant','fully compliant','with invoice','has invoice','invoice'].includes(v))return 'ok';if(['warn','without invoice','no invoice','missing invoice','without-invoice','without_invoice'].includes(v))return 'warn';if(['err','error','non-compliant','non compliant','non_compliant','noncompliant','with issues','non-compliant invoice','invoice has non-compliant part'].includes(v))return 'err';if(['journal','journal entry','journal-entry','journal_entry','je'].includes(v))return 'journal';if(['adjusting','adjusting entry','adjusting-entry','adjusting_entry','adjustment','aje'].includes(v))return 'adjusting';return 'unreviewed'}
 function verificationText(status){if(status==='ok')return 'Compliant';if(status==='warn')return 'Without Invoice';if(status==='err')return 'Non-Compliant';if(status==='journal')return 'Journal Entry';if(status==='adjusting')return 'Adjusting Entry';return 'Unreviewed'}
 // Journal Entry and Adjusting Entry are intentional postings that do not require
@@ -109,7 +130,7 @@ function parseRate(value){
   if(!hasPercent&&parsed>0&&parsed<1)return parsed*100;
   return parsed;
 }
-function normalizeAtcMaster(row){return{_id:row?._id||makeId('atc'),atcCode:normalizeATC(row?.atcCode??row?.atc_code??row?.atc??row?.code),rate:parseRate(row?.rate??row?.ewt_rate??row?.percentage??row?.tax_rate),description:String(row?.description??row?.nature??row?.income_payment??row?.payment_type??'').trim(),source:String(row?.source??row?.database_source??row?.reference??row?.basis??row?.legal_basis??'').trim(),status:String(row?.status??'active').trim().toLowerCase()||'active'}}
+function normalizeAtcMaster(row){return{_id:safeId(row?._id)||makeId('atc'),atcCode:normalizeATC(row?.atcCode??row?.atc_code??row?.atc??row?.code),rate:parseRate(row?.rate??row?.ewt_rate??row?.percentage??row?.tax_rate),description:String(row?.description??row?.nature??row?.income_payment??row?.payment_type??'').trim(),source:String(row?.source??row?.database_source??row?.reference??row?.basis??row?.legal_basis??'').trim(),status:String(row?.status??'active').trim().toLowerCase()||'active'}}
 function atcLookup(code){const normalized=normalizeATC(code);if(!normalized)return null;const source=(typeof atcMaster!=='undefined'&&Array.isArray(atcMaster)?atcMaster:demoAtcMaster||[]).map(normalizeAtcMaster);return source.find(a=>normalizeATC(a.atcCode)===normalized)||null}
 function atcRateForCode(code){const found=atcLookup(code);return found&&Number.isFinite(found.rate)?found.rate:null}
 function atcRateText(code){const rate=atcRateForCode(code);return rate===null?'--':rate.toFixed(2).replace(/\.00$/,'')+'%'}
@@ -126,7 +147,7 @@ const demoVatCategories=[
   {code:'GNQ',label:'Non-VAT goods',kind:'Non-VAT',rate:0,status:'locked'}
 ];
 function normalizeVatCodeRaw(value){return String(value??'').trim().toUpperCase().replace(/[^A-Z]/g,'')}
-function normalizeVatCategoryMaster(row){return{_id:row?._id||makeId('vatcat'),code:normalizeVatCodeRaw(row?.code??row?.vatCategory??row?.vat_category??row?.vat_category_code??row?.category),label:String(row?.label??row?.description??row?.desc??row?.meaning??'').trim(),kind:String(row?.kind??row?.vatType??row?.vat_type??row?.type??'VAT Registered').trim()||'VAT Registered',rate:parseRate(row?.rate??row?.vat_rate??row?.percentage)??0,status:String(row?.status??'active').trim().toLowerCase()||'active'}}
+function normalizeVatCategoryMaster(row){return{_id:safeId(row?._id)||makeId('vatcat'),code:normalizeVatCodeRaw(row?.code??row?.vatCategory??row?.vat_category??row?.vat_category_code??row?.category),label:String(row?.label??row?.description??row?.desc??row?.meaning??'').trim(),kind:String(row?.kind??row?.vatType??row?.vat_type??row?.type??'VAT Registered').trim()||'VAT Registered',rate:parseRate(row?.rate??row?.vat_rate??row?.percentage)??0,status:String(row?.status??'active').trim().toLowerCase()||'active'}}
 function normalizeVATCategory(value){const raw=String(value??'').trim().toUpperCase().replace(/[^A-Z]/g,'');return VAT_CATEGORIES.some(c=>c.code===raw)?raw:''}
 function vatCategoryLookup(code){const normalized=normalizeVATCategory(code);return VAT_CATEGORIES.find(c=>c.code===normalized)||null}
 function vatCategoryText(code){const c=vatCategoryLookup(code);return c?`${c.code} - ${c.label}`:'--'}
@@ -158,7 +179,7 @@ function normalizeTIN(value){return String(value??'').replace(/[^0-9]/g,'')}
 function formatTIN(value){const d=normalizeTIN(value);if(d.length===12)return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6,9)}-${d.slice(9)}`;return String(value??'').trim()}
 function personName(s){return [s.firstName,s.middleName,s.lastName].filter(Boolean).join(' ').trim()}
 function supplierDisplayName(s){return String(s?.registeredName||'').trim()||personName(s)||''}
-function normalizeSupplier(row){return{_id:row?._id||makeId('sup'),tin:formatTIN(row?.tin||row?.supplier_tin||row?.tin_no||row?.tax_identification_number),registeredName:String(row?.registeredName??row?.registered_name??row?.corporation_name??row?.registered_corporation_name??row?.company_name??row?.supplier_name??'').trim(),lastName:String(row?.lastName??row?.last_name??row?.registered_last_name??'').trim(),firstName:String(row?.firstName??row?.first_name??row?.registered_first_name??'').trim(),middleName:String(row?.middleName??row?.middle_name??row?.registered_middle_name??'').trim(),address:String(row?.address??row?.registeredAddress??row?.registered_address??row?.street_address??'').trim(),city:String(row?.city??row?.registered_city??'').trim(),zip:String(row?.zip??row?.zip_code??row?.registered_zip_code??row?.postal_code??'').trim()}}
+function normalizeSupplier(row){return{_id:safeId(row?._id)||makeId('sup'),tin:formatTIN(row?.tin||row?.supplier_tin||row?.tin_no||row?.tax_identification_number),registeredName:String(row?.registeredName??row?.registered_name??row?.corporation_name??row?.registered_corporation_name??row?.company_name??row?.supplier_name??'').trim(),lastName:String(row?.lastName??row?.last_name??row?.registered_last_name??'').trim(),firstName:String(row?.firstName??row?.first_name??row?.registered_first_name??'').trim(),middleName:String(row?.middleName??row?.middle_name??row?.registered_middle_name??'').trim(),address:String(row?.address??row?.registeredAddress??row?.registered_address??row?.street_address??'').trim(),city:String(row?.city??row?.registered_city??'').trim(),zip:String(row?.zip??row?.zip_code??row?.registered_zip_code??row?.postal_code??'').trim()}}
 function findSupplierByTIN(tin){const needle=normalizeTIN(tin);if(!needle)return null;return supplierMaster.map(normalizeSupplier).find(s=>normalizeTIN(s.tin)===needle)||null}
 function applySupplierToTransaction(tx,s){if(!s)return tx;return normalizeTransaction({...tx,tin:s.tin,supplier:supplierDisplayName(s),registeredName:s.registeredName,lastName:s.lastName,firstName:s.firstName,middleName:s.middleName,address:s.address,city:s.city,zip:s.zip})}
 // Stable per-transaction import sequence. It is preserved when already present on a
@@ -172,13 +193,13 @@ function nextTransactionSeq(t){
   if(Number.isFinite(raw)){if(raw>txnSeqCounter)txnSeqCounter=raw;return raw;}
   return ++txnSeqCounter;
 }
-function normalizeTransaction(t){const manualStatus=parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status);const exempt=(manualStatus==='journal'||manualStatus==='adjusting');let a=computeAmounts(t||{});if(exempt)a={...a,vatCategory:'',vatable:0,nonVatable:0,vat:0,total:a.amount};const _seq=nextTransactionSeq(t);const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=exempt?'':normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=exempt?0:expectedEwtAmount({amount:a.amount,atcCode});return{_id:t?._id||makeId('tx'),_seq,voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus,reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
-function normalizeLedger(row,type){return{_id:row?._id||makeId(type==='vat'?'vat':'ewt'),cv:String(row?.cv||row?.cv_no||row?.cv_number||'').trim(),supplier:String(row?.supplier||row?.supplier_name||row?.payee||row?.voucherName||row?.voucher_name||'').trim(),date:String(row?.date||row?.transaction_date||'').trim()||'--',description:String(row?.description??row?.desc??row?.memo??row?.particulars??row?.nature??'').trim(),amount:parseMoney(row?.amount??row?.balance??row?.ending_balance??(type==='vat'?row?.vat_amount??row?.input_vat:row?.ewt_amount??row?.withholding_tax)),account:String(row?.account||row?.ledger_account||'').trim(),ref:String(row?.ref||row?.reference||row?.gl_ref||'').trim(),type}}
+function normalizeTransaction(t){const manualStatus=parseVerification(t?.manualStatus??t?.status??t?.compliance??t?.verification??t?.document_status);const exempt=(manualStatus==='journal'||manualStatus==='adjusting');let a=computeAmounts(t||{});if(exempt)a={...a,vatCategory:'',vatable:0,nonVatable:0,vat:0,total:a.amount};const _seq=nextTransactionSeq(t);const supplier=String(t?.supplier??t?.registeredName??t?.registered_name??t?.supplierName??t?.supplier_name??'').trim();const voucherName=String(t?.voucherName??t?.voucher_name??t?.voucher??t?.voucher_payee??t?.payee??t?.book_payee??t?.booked_payee??supplier??'').trim();const atcCode=exempt?'':normalizeATC(t?.atcCode??t?.atc_code??t?.atc??t?.withholding_atc??t?.ewt_rate??t?.ewt);const ewtAmount=exempt?0:expectedEwtAmount({amount:a.amount,atcCode});return{_id:safeId(t?._id)||makeId('tx'),_seq,voucherName:voucherName||supplier||'(No Voucher Name)',supplier,tin:formatTIN(t?.tin||t?.supplier_tin||''),cv:String(t?.cv||t?.cv_no||t?.cv_number||'').trim(),inv:String(t?.inv||t?.invoice_no||t?.invoice||t?.or_no||'').trim(),date:String(t?.date||t?.payment_date||t?.document_date||'').trim()||'--',description:String(t?.description||t?.desc||t?.nature||t?.particulars||'').trim(),...a,vatReg:deriveVatTypeFromCategory(a.vatCategory,a.vat),ewtAmount,atcCode,manualStatus,reviewNote:String(t?.reviewNote??t?.review_note??t?.note??'').trim(),lastReviewed:String(t?.lastReviewed??t?.last_reviewed??'').trim(),accountingTitle:String(t?.accountingTitle??t?.accounting_title??t?.accounting_titles??t?.account_title??t?.accounting??'').trim(),bankAccount:String(t?.bankAccount??t?.bank_account??t?.bank??t?.cash_bank_account??'').trim(),registeredName:String(t?.registeredName??t?.registered_name??'').trim(),lastName:String(t?.lastName??t?.last_name??t?.registered_last_name??'').trim(),firstName:String(t?.firstName??t?.first_name??t?.registered_first_name??'').trim(),middleName:String(t?.middleName??t?.middle_name??t?.registered_middle_name??'').trim(),address:String(t?.address??t?.registeredAddress??t?.registered_address??'').trim(),city:String(t?.city??t?.registered_city??'').trim(),zip:String(t?.zip??t?.zip_code??t?.registered_zip_code??'').trim(),supplierManualOverride:Boolean(t?.supplierManualOverride||t?.supplier_manual_override)}}
+function normalizeLedger(row,type){return{_id:safeId(row?._id)||makeId(type==='vat'?'vat':'ewt'),cv:String(row?.cv||row?.cv_no||row?.cv_number||'').trim(),supplier:String(row?.supplier||row?.supplier_name||row?.payee||row?.voucherName||row?.voucher_name||'').trim(),date:String(row?.date||row?.transaction_date||'').trim()||'--',description:String(row?.description??row?.desc??row?.memo??row?.particulars??row?.nature??'').trim(),amount:parseMoney(row?.amount??row?.balance??row?.ending_balance??(type==='vat'?row?.vat_amount??row?.input_vat:row?.ewt_amount??row?.withholding_tax)),account:String(row?.account||row?.ledger_account||'').trim(),ref:String(row?.ref||row?.reference||row?.gl_ref||'').trim(),type}}
 // Invoice document METADATA. The files themselves live in Supabase Storage (private
 // bucket); each record links a stored file to its transaction by the transaction's
 // persistent _id (txnId), never by CV/invoice number. Explicit literal like every
 // other normalizer so records keep an exact, stable shape through cloud round-trips.
-function normalizeInvoiceDocument(d){return{_id:d?._id||makeId('doc'),txnId:String(d?.txnId||'').trim(),originalName:String(d?.originalName||'').trim(),ext:String(d?.ext||'').trim().toLowerCase(),mimeType:String(d?.mimeType||'').trim(),fileSize:Number(d?.fileSize||0),storagePath:String(d?.storagePath||'').trim(),uploadedAt:String(d?.uploadedAt||'').trim(),uploadedBy:String(d?.uploadedBy||'').trim(),uploadedByName:String(d?.uploadedByName||'').trim()}}
+function normalizeInvoiceDocument(d){return{_id:safeId(d?._id)||makeId('doc'),txnId:String(d?.txnId||'').trim(),originalName:String(d?.originalName||'').trim(),ext:String(d?.ext||'').trim().toLowerCase(),mimeType:String(d?.mimeType||'').trim(),fileSize:Number(d?.fileSize||0),storagePath:String(d?.storagePath||'').trim(),uploadedAt:String(d?.uploadedAt||'').trim(),uploadedBy:String(d?.uploadedBy||'').trim(),uploadedByName:String(d?.uploadedByName||'').trim()}}
 let VAT_CATEGORIES=loadArray(VAT_CATEGORIES_KEY,demoVatCategories).map(normalizeVatCategoryMaster);
 let atcMaster=loadArray(ATC_MASTER_KEY,demoAtcMaster).map(normalizeAtcMaster);
 let supplierMaster=loadArray(SUPPLIER_MASTER_KEY,demoSupplierMaster).map(normalizeSupplier);
@@ -1617,8 +1638,27 @@ function docFileIconSvg(ext){const image=(ext==='jpg'||ext==='jpeg'||ext==='png'
   :'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>'}
 function validateDocFile(f){const ext=String(f.name.split('.').pop()||'').toLowerCase();
   if(!DOC_ALLOWED_EXT[ext])return{ok:false,msg:`"${f.name}" is not a supported file type. Use PDF, JPG, JPEG, or PNG.`};
+  if(!f.size)return{ok:false,msg:`"${f.name}" is empty.`};
   if(f.size>DOC_MAX_BYTES)return{ok:false,msg:`"${f.name}" is ${formatFileSize(f.size)} — the limit is 10 MB per file.`};
   return{ok:true,ext}}
+// PURE + TESTABLE: verify the file's leading bytes (magic number) match the claimed
+// extension, so a renamed/spoofed file (e.g. an .exe called invoice.pdf, or a mismatched
+// MIME type) is rejected before upload. `head` is a Uint8Array of the first bytes.
+function matchesDocSignature(head,ext){
+  const b=head||[];
+  const starts=sig=>sig.every((v,i)=>b[i]===v);
+  const isPdf=starts([0x25,0x50,0x44,0x46]);                       // %PDF
+  const isJpg=starts([0xFF,0xD8,0xFF]);                            // JPEG
+  const isPng=starts([0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]);   // PNG
+  if(ext==='pdf')return isPdf;
+  if(ext==='jpg'||ext==='jpeg')return isJpg;
+  if(ext==='png')return isPng;
+  return false;
+}
+async function fileSignatureOk(file,ext){
+  try{const head=new Uint8Array(await file.slice(0,12).arrayBuffer());return matchesDocSignature(head,ext);}
+  catch(e){return false;}
+}
 // NOTE: buttons in this section intentionally carry NO id attribute — the CV popup's
 // rebuild guard in renderCVReviewModal() skips re-rendering while an element WITH an
 // id inside the popup has focus, and a clicked button must not suppress the rebuild
@@ -1631,14 +1671,16 @@ function documentsSection(t){
   // icon and a small "×" delete sit on the right. (No Scan/Replace buttons — supplier
   // TIN detection is autonomous on upload.)
   const dl='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  // Actions use event delegation (data-doc-act + data-doc-id) rather than inline
+  // onclick with an interpolated id — nothing record-derived is placed in a handler.
   const docRows=docs.map(d=>{
     const meta=[d.originalName||'',d.fileSize?formatFileSize(d.fileSize):'',d.uploadedByName?'by '+d.uploadedByName:'',docUploadDateText(d.uploadedAt)].filter(Boolean).join(' · ');
-    return `<div class="doc-row" data-doc-id="${attr(d._id)}"><button type="button" class="doc-name-btn" onclick="viewInvoiceDoc('${attr(d._id)}')" title="View — ${attr(meta)}">${docFileIconSvg(d.ext)}<span class="doc-name">${esc(invoiceDocDisplayName(d))}</span></button><button type="button" class="doc-icon-btn" onclick="downloadInvoiceDoc('${attr(d._id)}')" aria-label="Download" title="Download">${dl}</button><button type="button" class="doc-x-btn" onclick="deleteInvoiceDoc('${attr(d._id)}')" aria-label="Delete document" title="Delete document">×</button></div>`;
+    return `<div class="doc-row" data-doc-id="${attr(d._id)}"><button type="button" class="doc-name-btn" data-doc-act="view" data-doc-id="${attr(d._id)}" title="View — ${attr(meta)}">${docFileIconSvg(d.ext)}<span class="doc-name">${esc(invoiceDocDisplayName(d))}</span></button><button type="button" class="doc-icon-btn" data-doc-act="download" data-doc-id="${attr(d._id)}" aria-label="Download" title="Download">${dl}</button><button type="button" class="doc-x-btn" data-doc-act="delete" data-doc-id="${attr(d._id)}" aria-label="Delete document" title="Delete document">×</button></div>`;
   }).join('');
   const pendingRows=pending.map(p=>`<div class="doc-row uploading"><span class="doc-name-btn" aria-disabled="true">${docFileIconSvg('')}<span class="doc-name">${esc(p.fileName)}</span></span><span class="doc-uploading-tag">Uploading…</span></div>`).join('');
   const list=(docRows||pendingRows)?docRows+pendingRows:'<span class="doc-empty">No documents.</span>';
   return `<div class="docs-section" data-docs-txn="${attr(t._id)}">
-    <div class="docs-head"><span class="docs-section-title">Documents <span class="doc-count">(${docs.length})</span></span><button type="button" class="btn btn-small doc-upload-btn" onclick="startDocUpload('${attr(t._id)}')" title="Upload PDF, JPG, or PNG · max 10 MB · shared with all users">+ Upload</button></div>
+    <div class="docs-head"><span class="docs-section-title">Documents <span class="doc-count">(${docs.length})</span></span><button type="button" class="btn btn-small doc-upload-btn" data-doc-act="upload" data-doc-id="${attr(t._id)}" title="Upload PDF, JPG, or PNG · max 10 MB · shared with all users">+ Upload</button></div>
     <div class="doc-list">${list}</div>
   </div>`;
 }
@@ -1699,7 +1741,11 @@ const OCR_LIBS={
 const OCR_MAX_PDF_OCR_PAGES=3;    // OCR is CPU-heavy: cap scanned-PDF OCR to the first N pages
 const OCR_MAX_PDF_TEXT_PAGES=20;  // cheap text-layer extraction cap for very long PDFs
 let _ocrLibsPromise=null;
-function loadExternalScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.onload=()=>resolve();s.onerror=()=>reject(new Error('Failed to load '+src));document.head.appendChild(s)})}
+// ponytail: OCR libs (and, at runtime, tesseract's WASM core + language data) load from a
+// CDN without Subresource Integrity. Self-host under /vendor or add integrity hashes to
+// fully remove unverified remote code execution. crossOrigin/referrerPolicy are set as a
+// prerequisite for SRI and to avoid leaking the page URL to the CDN.
+function loadExternalScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.crossOrigin='anonymous';s.referrerPolicy='no-referrer';s.onload=()=>resolve();s.onerror=()=>reject(new Error('Failed to load '+src));document.head.appendChild(s)})}
 async function ensureOcrLibs(){
   if(window.Tesseract&&window.pdfjsLib)return;
   if(!_ocrLibsPromise){
@@ -1784,10 +1830,25 @@ async function extractTextFromPdf(arrayBuffer){
 // excluded, and fills it in. If the line already has a TIN it does nothing; an existing
 // TIN is never overwritten. Verification status is never changed. Errors stay silent.
 const _autoTinAttempted=new Set();
+// PURE + TESTABLE: the autonomous-apply gate. Decides whether an OCR-detected TIN may be
+// written to a line. Encodes every safety rule: retry guard (one attempt per line),
+// no candidate, invalid candidate, and never overwrite an existing TIN. Inputs are plain
+// digit strings so it can be unit-tested without the DOM/OCR engine.
+function tinAutoApplyDecision(o){
+  o=o||{};
+  if(o.attempted)return 'skip-attempted';
+  const cur=String(o.currentTinDigits||'').replace(/\D/g,'');
+  if(cur)return 'skip-has-tin';                 // never overwrite an existing TIN
+  const cand=String(o.candidateDigits||'').replace(/\D/g,'');
+  if(!cand)return 'skip-none';
+  if(cand.length<9)return 'skip-invalid';
+  return 'apply';
+}
 async function autoDetectTinFromFile(file,ext,txnId){
-  if(_autoTinAttempted.has(txnId))return;      // one attempt per line per session
   const before=transactions.find(x=>x._id===txnId);
-  if(!before||normalizeTIN(before.tin))return; // already has a TIN -> do nothing
+  // Pre-OCR guard (avoid wasted work): attempted already, or line already has a TIN.
+  if(tinAutoApplyDecision({attempted:_autoTinAttempted.has(txnId),currentTinDigits:normalizeTIN(before&&before.tin)})!=='apply')return;
+  if(!before)return;
   _autoTinAttempted.add(txnId);
   try{
     await ensureOcrLibs();
@@ -1795,10 +1856,10 @@ async function autoDetectTinFromFile(file,ext,txnId){
     if(ext==='pdf')text=await extractTextFromPdf(await file.arrayBuffer());
     else text=await ocrRecognize(file);
     const best=extractTinCandidates(text,normalizeTIN(COMPANY_PROFILE.tin))[0];
-    if(!best||normalizeTIN(best.normalized).length<9)return;
-    // Re-check after the async OCR gap: line still exists and STILL has no TIN.
+    // Re-check after the async OCR gap using the same gate: still no TIN, valid candidate.
     const idx=transactions.findIndex(x=>x._id===txnId);
-    if(idx<0||normalizeTIN(transactions[idx].tin))return;
+    if(idx<0)return;
+    if(tinAutoApplyDecision({currentTinDigits:normalizeTIN(transactions[idx].tin),candidateDigits:normalizeTIN(best&&best.normalized)})!=='apply')return;
     // Same path as manual entry: normalize, then Supplier Master lookup, then persist.
     let updated=normalizeTransaction({...transactions[idx],tin:best.normalized});
     const master=(!updated.supplierManualOverride)?findSupplierByTIN(updated.tin):null;
@@ -1823,7 +1884,14 @@ async function handleDocFileInput(e){
   if(!docStorageReady())return;
   if(!transactions.some(t=>t._id===txnId)){showToast('Transaction not found.');return}
   const valid=[];
-  for(const f of files){const v=validateDocFile(f);if(!v.ok){showToast(v.msg);continue}valid.push({file:f,ext:v.ext})}
+  for(const f of files){
+    const v=validateDocFile(f);
+    if(!v.ok){showToast(v.msg);continue}
+    // Content-signature check: the bytes must actually be a PDF/JPEG/PNG, not just a
+    // matching extension/MIME (both are trivially spoofable).
+    if(!(await fileSignatureOk(f,v.ext))){showToast(`"${f.name}" does not look like a real ${v.ext.toUpperCase()} file and was not uploaded.`);continue}
+    valid.push({file:f,ext:v.ext});
+  }
   if(!valid.length)return;
   for(const {file,ext} of valid){
     const docId=makeId('doc');
@@ -1858,10 +1926,11 @@ async function viewInvoiceDoc(docId){
   if(!d){showToast('Document record not found.');return}
   if(!docStorageReady())return;
   // Open the window synchronously (popup-blocker safe), then point it at the signed URL.
-  const w=window.open('','_blank');
+  // noopener severs the opener reference so the document tab can't script this app.
+  const w=window.open('','_blank','noopener');
   try{
     const url=await window.vatDocStorage.signedUrl(d.storagePath);
-    if(w)w.location=url;else window.open(url,'_blank');
+    if(w)w.location=url;else window.open(url,'_blank','noopener');
   }catch(err){
     if(w)w.close();
     console.error('Document view failed:',err);
@@ -1874,7 +1943,7 @@ async function downloadInvoiceDoc(docId){
   if(!docStorageReady())return;
   try{
     const url=await window.vatDocStorage.signedUrl(d.storagePath,invoiceDocDisplayName(d));
-    const a=document.createElement('a');a.href=url;a.download=invoiceDocDisplayName(d);
+    const a=document.createElement('a');a.href=url;a.download=invoiceDocDisplayName(d);a.rel='noopener';
     document.body.appendChild(a);a.click();a.remove();
   }catch(err){
     console.error('Document download failed:',err);
@@ -3097,6 +3166,17 @@ function showToast(msg){const t=document.getElementById('toast');t.textContent=m
 function handleVerificationClick(e){
   const close=e.target.closest('[data-close-cv-review]');
   if(close){e.stopPropagation();closeCVReviewModal();return}
+  // Document actions via delegation (data-doc-act + data-doc-id) — no interpolated ids.
+  const docBtn=e.target.closest('[data-doc-act]');
+  if(docBtn){
+    e.stopPropagation();
+    const id=docBtn.getAttribute('data-doc-id'), act=docBtn.getAttribute('data-doc-act');
+    if(act==='view')viewInvoiceDoc(id);
+    else if(act==='download')downloadInvoiceDoc(id);
+    else if(act==='delete')deleteInvoiceDoc(id);
+    else if(act==='upload')startDocUpload(id);
+    return;
+  }
   const remove=e.target.closest('.wp-remove');
   if(remove){e.stopPropagation();removeTransaction(remove.dataset.id);renderCVReviewModal();return}
   if(e.target.closest('input')||e.target.closest('select')||e.target.closest('button'))e.stopPropagation();
