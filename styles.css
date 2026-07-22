@@ -1114,3 +1114,21 @@ table.audit-table td{vertical-align:top}
 .doc-actions-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .doc-hint{font-size:10px;color:var(--text3)}
 .doc-count{font-weight:500;color:var(--text3)}
+
+/* ---- Supporting-document coverage tracker (Purchase Transactions tab) ----
+   A compact sub-row under the main metrics; its own grid so the three cards
+   spread across the width instead of being locked into the 6-column metrics grid. */
+.doc-tracker-metrics{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:-2px}
+.doc-tracker-metrics:empty{display:none}
+
+/* ---- Assisted TIN scan modal (OCR results review) ---- */
+.tin-scan-dialog{width:min(640px,calc(100vw - 36px));max-height:min(84vh,720px);padding:0;display:flex;flex-direction:column}
+#tinScanBody{padding:14px 16px 18px;overflow:auto}
+.tin-scan-intro{font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:10px}
+.tin-scan-note{font-size:11.5px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:var(--radius);padding:8px 10px;margin-bottom:10px}
+.tin-candidate-list{display:flex;flex-direction:column;gap:8px}
+.tin-candidate{border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px;background:var(--surface2)}
+.tin-candidate-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tin-candidate-value{font-size:14px;font-weight:800;color:var(--text);letter-spacing:.02em}
+.tin-candidate-context{font-size:11px;color:var(--text3);margin:5px 0 8px;line-height:1.4;word-break:break-word}
+.tin-candidate-actions{display:flex;justify-content:flex-end}

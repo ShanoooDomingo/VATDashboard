@@ -1354,6 +1354,7 @@ function renderWorking(){
   const supplierSpecialCount=allTx.filter(t=>supplierSpecialIssues(t).length).length;
   document.getElementById('reconMetrics').innerHTML=`<div class="metric"><div class="metric-label">CV Groups</div><div class="metric-value">${groups.length}</div><div class="metric-sub">${allTx.length} purchase rows</div></div><div class="metric review"><div class="metric-label">Supplier Data Needed</div><div class="metric-value">${forVerification}</div><div class="metric-sub">blank supplier or TIN</div></div><div class="metric money-metric breakdown-tab ${isBalanced(vatDiff)?'ok':'err'} ${activePurchaseBreakdown==='vat'?'active':''}" onclick="setPurchaseBreakdown('vat')" aria-pressed="${activePurchaseBreakdown==='vat'?'true':'false'}"><div class="metric-label">Purchase VAT</div><div class="metric-value">${peso(bookVat)}</div><div class="metric-sub">VAT Category breakdown</div></div><div class="metric money-metric breakdown-tab ${isBalanced(ewtDiff)?'ok':'err'} ${activePurchaseBreakdown==='ewt'?'active':''}" onclick="setPurchaseBreakdown('ewt')" aria-pressed="${activePurchaseBreakdown==='ewt'?'true':'false'}"><div class="metric-label">Purchase EWT</div><div class="metric-value">${peso(bookEwt)}</div><div class="metric-sub">ATC Code breakdown</div></div><div class="metric review"><div class="metric-label">Unreviewed</div><div class="metric-value">${unrev}</div><div class="metric-sub">needs manual tag</div></div><div class="metric ${supplierSpecialCount?'warn':'ok'}"><div class="metric-label">Supplier Detail Review</div><div class="metric-value">${supplierSpecialCount}</div><div class="metric-sub">special character warning(s)</div></div>`;
   renderPurchaseTaxBreakdown(allTx);
+  renderDocTrackerMetrics();
   document.getElementById('workThead').innerHTML=`<tr><th class="sort-th" style="width:10%">${workSortHeader('date','Date')}</th><th class="sort-th" style="width:15%">${workSortHeader('cv','CV Number')}</th><th class="sort-th" style="width:21%">${workSortHeader('voucher','Voucher name')}</th><th class="num sort-th" style="width:11%">${workSortHeader('vat','Purchase VAT')}</th><th class="num sort-th" style="width:11%">${workSortHeader('ewt','Purchase EWT')}</th><th class="num sort-th" style="width:12%">${workSortHeader('total','Total Amount')}</th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('balance','Balance check')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Balance Check explanation">i</button><span class="column-tooltip"><strong>Balance Check</strong> compares the total computed Purchase VAT and Purchase EWT from Purchase Transactions against uploaded VAT Balances and EWT Balances with the same CV Number. Balanced means both differences are within the rounding allowance; Review balances means at least one total does not match.</span></span></th><th class="sort-th" style="width:10%"><span class="column-info-wrap">${workSortHeader('verification','Verification')}<button class="info-icon-btn column-info-btn" type="button" onclick="event.stopPropagation()" aria-label="Verification explanation">i</button><span class="column-tooltip"><strong>Verification</strong> summarizes the line-level review status for the CV: Compliant, Without Invoice, Non-Compliant, Unreviewed, Journal Entry, or Adjusting Entry. <strong>Journal Entry</strong> marks a disbursement intentionally booked as a journal entry: it is valid without invoice, VAT category, ATC code, or TIN, and is not flagged incomplete. <strong>Adjusting Entry</strong> applies the same field exemptions and is additionally excluded from all BIR Compliance Exports (including the Cash Disbursement Book). Open the CV to fix missing supplier, TIN, invoice, tax code, amount, status, or review notes.</span></span></th></tr>`;
   const tbody=document.getElementById('workTbody'),tfoot=document.getElementById('workTfoot');
   tbody.innerHTML='';
@@ -1623,7 +1624,7 @@ function validateDocFile(f){const ext=String(f.name.split('.').pop()||'').toLowe
 function documentsSection(t){
   const docs=docsForTransaction(t._id);
   const pending=[...pendingDocUploads.values()].filter(p=>p.txnId===t._id);
-  const docRows=docs.map(d=>`<div class="doc-row" data-doc-id="${attr(d._id)}">${docFileIconSvg(d.ext)}<div class="doc-info"><div class="doc-name">${esc(invoiceDocDisplayName(d))}</div><div class="doc-meta">${esc(d.originalName||'')}${d.fileSize?' · '+esc(formatFileSize(d.fileSize)):''}${d.uploadedByName?' · Uploaded by '+esc(d.uploadedByName):''}${docUploadDateText(d.uploadedAt)?' · '+esc(docUploadDateText(d.uploadedAt)):''}</div></div><div class="doc-row-actions action-buttons"><button type="button" class="btn btn-small" onclick="viewInvoiceDoc('${attr(d._id)}')">View</button><button type="button" class="btn btn-small" onclick="downloadInvoiceDoc('${attr(d._id)}')">Download</button><button type="button" class="btn btn-small" onclick="startDocReplace('${attr(d._id)}')">Replace</button><button type="button" class="btn btn-small btn-danger" onclick="deleteInvoiceDoc('${attr(d._id)}')">Delete</button></div></div>`).join('');
+  const docRows=docs.map(d=>`<div class="doc-row" data-doc-id="${attr(d._id)}">${docFileIconSvg(d.ext)}<div class="doc-info"><div class="doc-name">${esc(invoiceDocDisplayName(d))}</div><div class="doc-meta">${esc(d.originalName||'')}${d.fileSize?' · '+esc(formatFileSize(d.fileSize)):''}${d.uploadedByName?' · Uploaded by '+esc(d.uploadedByName):''}${docUploadDateText(d.uploadedAt)?' · '+esc(docUploadDateText(d.uploadedAt)):''}</div></div><div class="doc-row-actions action-buttons"><button type="button" class="btn btn-small" onclick="viewInvoiceDoc('${attr(d._id)}')">View</button><button type="button" class="btn btn-small" onclick="downloadInvoiceDoc('${attr(d._id)}')">Download</button><button type="button" class="btn btn-small" onclick="scanDocForTin('${attr(d._id)}')">Scan for TIN</button><button type="button" class="btn btn-small" onclick="startDocReplace('${attr(d._id)}')">Replace</button><button type="button" class="btn btn-small btn-danger" onclick="deleteInvoiceDoc('${attr(d._id)}')">Delete</button></div></div>`).join('');
   const pendingRows=pending.map(p=>`<div class="doc-row uploading">${docFileIconSvg('')}<div class="doc-info"><div class="doc-name">${esc(p.fileName)}</div><div class="doc-meta">Uploading to shared cloud…</div></div></div>`).join('');
   const list=(docRows||pendingRows)?docRows+pendingRows:'<div class="empty-state doc-empty">No supporting documents uploaded.</div>';
   return `<div class="docs-section" data-docs-txn="${attr(t._id)}">
@@ -1640,6 +1641,189 @@ function refreshDocsSections(txnId){
     const t=transactions.find(x=>x._id===txnId);
     if(t)sec.outerHTML=documentsSection(t);
   });
+  // Keep the document-coverage tracker in step with every upload/replace/delete.
+  renderDocTrackerMetrics();
+}
+// ---- Supporting-document coverage tracker ----
+// Pure and testable: given transaction lines and the invoice-document metadata array,
+// compute coverage stats using the SAME txnId matching as docsForTransaction(). A line
+// is "with documents" when at least one document's txnId equals its _id. Orphaned
+// document metadata (txnId not present among the given lines) is ignored — it is never
+// counted as a covered line, and its files are not added to the file total.
+function documentCoverageStats(txns,docs){
+  const list=Array.isArray(txns)?txns:[];
+  const counts=new Map();
+  (Array.isArray(docs)?docs:[]).forEach(d=>{const k=d&&d.txnId;if(k==null||k==='')return;counts.set(k,(counts.get(k)||0)+1)});
+  let withDocs=0,totalFiles=0;
+  list.forEach(t=>{const n=counts.get(t&&t._id)||0;if(n>0){withDocs++;totalFiles+=n}});
+  const totalLines=list.length;
+  const withoutDocs=totalLines-withDocs;
+  const coveragePct=totalLines?Math.round((withDocs/totalLines)*100):0;
+  return{totalLines,withDocs,withoutDocs,coveragePct,totalFiles};
+}
+// Render the tracker for the CURRENTLY SELECTED reporting period (follows the same
+// visibleTransactionsForMonth() scope as the rest of the Purchase Transactions tab).
+function renderDocTrackerMetrics(){
+  const el=document.getElementById('docTrackerMetrics');
+  if(!el)return;
+  const s=documentCoverageStats(visibleTransactionsForMonth(),invoiceDocuments);
+  const covClass=!s.totalLines?'':(s.coveragePct>=100?'ok':(s.coveragePct>0?'review':'warn'));
+  el.innerHTML=`<div class="metric ${covClass}"><div class="metric-label">Document Coverage</div><div class="metric-value">${s.coveragePct}%</div><div class="metric-sub">${s.withDocs} of ${s.totalLines} transaction line(s)</div></div><div class="metric"><div class="metric-label">Lines With Documents</div><div class="metric-value">${s.withDocs}</div><div class="metric-sub">${s.withoutDocs} without documents</div></div><div class="metric"><div class="metric-label">Uploaded Files</div><div class="metric-value">${s.totalFiles}</div><div class="metric-sub">supporting document file(s)</div></div>`;
+}
+/* ---- Assisted OCR-based TIN extraction (browser-local, Option A) ----
+ * Reads an already-uploaded supporting document ENTIRELY on the user's device:
+ * text-based PDFs are read via pdf.js getTextContent() (no OCR); scanned PDFs and
+ * images are OCR'd via tesseract.js (WASM) in the browser. No document bytes are ever
+ * sent to an external OCR provider (only the OCR engine assets are fetched, and can be
+ * self-hosted). Extracted text is transient and never saved. OCR results are SUGGESTIONS
+ * only: the user reviews candidate TINs with surrounding context and explicitly confirms
+ * before anything is written; a non-empty TIN is never overwritten without confirmation. */
+const OCR_LIBS={
+  tesseract:'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+  pdfjs:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js',
+  pdfWorker:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js'
+};
+const OCR_MAX_PDF_OCR_PAGES=5;    // OCR is CPU-heavy: cap scanned-PDF OCR to the first N pages
+const OCR_MAX_PDF_TEXT_PAGES=20;  // cheap text-layer extraction cap for very long PDFs
+let _tinScanState={txnId:null,docId:null,candidates:[]};
+let _ocrLibsPromise=null;
+function loadExternalScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.onload=()=>resolve();s.onerror=()=>reject(new Error('Failed to load '+src));document.head.appendChild(s)})}
+async function ensureOcrLibs(){
+  if(window.Tesseract&&window.pdfjsLib)return;
+  if(!_ocrLibsPromise){
+    _ocrLibsPromise=(async()=>{
+      if(!window.pdfjsLib)await loadExternalScript(OCR_LIBS.pdfjs);
+      if(window.pdfjsLib&&window.pdfjsLib.GlobalWorkerOptions)window.pdfjsLib.GlobalWorkerOptions.workerSrc=OCR_LIBS.pdfWorker;
+      if(!window.Tesseract)await loadExternalScript(OCR_LIBS.tesseract);
+    })().catch(err=>{_ocrLibsPromise=null;throw err});
+  }
+  return _ocrLibsPromise;
+}
+// PURE + TESTABLE: find Philippine TIN candidates in free text. Self-contained (no app
+// deps). Returns [{normalized, digits, context, nearLabel}], deduped by digits, with
+// TIN-labelled matches ranked first. A candidate is a 9-, 12-, or 14-digit number
+// (base 9 + optional 3/5-digit branch). Never auto-selects; caller shows all for review.
+function extractTinCandidates(text){
+  const src=String(text||'');
+  if(!src)return [];
+  const found=new Map();
+  const add=(matchText,index)=>{
+    const digits=String(matchText).replace(/\D/g,'');
+    if(!(digits.length===9||digits.length===12||digits.length===14))return;
+    const before=src.slice(Math.max(0,index-24),index);
+    const nearLabel=/tin\b|t\.?\s*i\.?\s*n\.?|tax\s*id/i.test(before);
+    let normalized;
+    if(digits.length===9)normalized=`${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}`;
+    else if(digits.length===12)normalized=`${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}-${digits.slice(9,12)}`;
+    else normalized=`${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6,9)}-${digits.slice(9)}`;
+    const ctxStart=Math.max(0,index-35),ctxEnd=Math.min(src.length,index+String(matchText).length+35);
+    const context=src.slice(ctxStart,ctxEnd).replace(/\s+/g,' ').trim();
+    const existing=found.get(digits);
+    if(existing){if(nearLabel&&!existing.nearLabel){existing.nearLabel=true;existing.context=context}return}
+    found.set(digits,{normalized,digits,context,nearLabel});
+  };
+  let m;
+  const grouped=/\d{3}[-\s.]\d{3}[-\s.]\d{3}(?:[-\s.]\d{3,5})?/g;
+  while((m=grouped.exec(src)))add(m[0],m.index);
+  const bare=/\d{9,14}/g;
+  while((m=bare.exec(src))){const d=m[0].replace(/\D/g,'');if(d.length===9||d.length===12||d.length===14)add(m[0],m.index)}
+  return [...found.values()].sort((a,b)=>(b.nearLabel?1:0)-(a.nearLabel?1:0));
+}
+async function fetchDocBlob(d){
+  const url=await window.vatDocStorage.signedUrl(d.storagePath);
+  const res=await fetch(url);
+  if(!res.ok)throw new Error('Could not fetch the document ('+res.status+')');
+  return await res.blob();
+}
+async function ocrRecognize(image){
+  const worker=await window.Tesseract.createWorker('eng');
+  try{const {data}=await worker.recognize(image);return (data&&data.text)||''}
+  finally{try{await worker.terminate()}catch(e){}}
+}
+async function extractTextFromPdf(arrayBuffer){
+  const pdf=await window.pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  const total=pdf.numPages;
+  let text='';
+  const textPages=Math.min(total,OCR_MAX_PDF_TEXT_PAGES);
+  for(let p=1;p<=textPages;p++){const page=await pdf.getPage(p);const tc=await page.getTextContent();text+=' '+tc.items.map(i=>i.str).join(' ')}
+  if(text.replace(/\s/g,'').length>=20)return text; // usable text layer -> no OCR needed
+  // Scanned/image PDF: render the first N pages and OCR them.
+  let ocrText='';
+  const ocrPages=Math.min(total,OCR_MAX_PDF_OCR_PAGES);
+  const worker=await window.Tesseract.createWorker('eng');
+  try{
+    for(let p=1;p<=ocrPages;p++){
+      const page=await pdf.getPage(p);
+      const viewport=page.getViewport({scale:2});
+      const canvas=document.createElement('canvas');
+      canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+      const {data}=await worker.recognize(canvas);
+      ocrText+=' '+((data&&data.text)||'');
+    }
+  }finally{try{await worker.terminate()}catch(e){}}
+  return ocrText;
+}
+async function scanDocForTin(docId){
+  const d=invoiceDocuments.find(x=>x._id===docId);
+  if(!d){showToast('Document record not found.');return}
+  if(!docStorageReady())return;
+  const t=transactions.find(x=>x._id===d.txnId);
+  if(!t){showToast('This document is not linked to a transaction line.');return}
+  showToast('Scanning on your device… the first run downloads the OCR engine.');
+  try{
+    await ensureOcrLibs();
+    const blob=await fetchDocBlob(d);
+    let text='';
+    if(d.ext==='pdf'){text=await extractTextFromPdf(await blob.arrayBuffer())}
+    else{text=await ocrRecognize(blob)}
+    const candidates=extractTinCandidates(text);
+    if(!candidates.length){showToast('No TIN candidate found.');return}
+    _tinScanState={txnId:t._id,docId:d._id,candidates};
+    openTinScanModal(d,t,candidates);
+  }catch(err){console.error('TIN scan failed:',err);showToast('Scan failed: '+(err.message||err))}
+}
+function openTinScanModal(d,t,candidates){
+  const modal=document.getElementById('tinScanModal'),body=document.getElementById('tinScanBody');
+  if(!modal||!body)return;
+  const curTin=t.tin?`<div class="tin-scan-note">This line already has TIN <strong>${esc(t.tin)}</strong>. Choosing a candidate will ask you to confirm before replacing it.</div>`:'';
+  // Candidate values are NOT interpolated into inline handlers — buttons carry only an
+  // index and are dispatched through delegated handleTinScanClick(). esc() guards text.
+  const rows=candidates.map((c,i)=>`<div class="tin-candidate"><div class="tin-candidate-main"><span class="tin-candidate-value mono">${esc(c.normalized)}</span>${c.nearLabel?'<span class="badge badge-ok">near “TIN” label</span>':''}</div><div class="tin-candidate-context">…${esc(c.context)}…</div><div class="tin-candidate-actions"><button type="button" class="btn btn-small btn-primary" data-tin-index="${i}">Use this TIN</button></div></div>`).join('');
+  body.innerHTML=`<div class="tin-scan-intro">Reviewed entirely on your device — nothing was uploaded to an external service. OCR results are <strong>suggestions</strong>, not verified tax data. Select the correct TIN for <strong>${esc(invoiceDocDisplayName(d))}</strong>.</div>${curTin}<div class="tin-candidate-list">${rows}</div>`;
+  modal.classList.add('visible');modal.setAttribute('aria-hidden','false');
+}
+function closeTinScanModal(){
+  const modal=document.getElementById('tinScanModal');
+  if(modal){modal.classList.remove('visible');modal.setAttribute('aria-hidden','true')}
+  const body=document.getElementById('tinScanBody');if(body)body.innerHTML='';
+  _tinScanState={txnId:null,docId:null,candidates:[]};
+}
+function confirmTinCandidate(index){
+  const st=_tinScanState,c=st.candidates[index];
+  if(!c)return;
+  const idx=transactions.findIndex(x=>x._id===st.txnId);
+  if(idx<0){showToast('Transaction line no longer exists.');closeTinScanModal();return}
+  if(normalizeTIN(c.normalized).length<9){showToast('That candidate is not a valid TIN.');return}
+  const cur=transactions[idx];
+  const curDigits=normalizeTIN(cur.tin),newDigits=normalizeTIN(c.normalized);
+  if(curDigits&&curDigits===newDigits){showToast('This line already has that TIN.');closeTinScanModal();return}
+  if(curDigits&&curDigits!==newDigits){ if(!confirm(`This line already has TIN ${cur.tin}. Replace it with ${c.normalized}?`))return; }
+  // Write through the SAME path as manual entry: normalize, then Supplier Master lookup,
+  // then persist via saveAll()/cloud-sync. Never marks compliance — status is untouched.
+  let updated=normalizeTransaction({...cur,tin:c.normalized});
+  const master=(!updated.supplierManualOverride)?findSupplierByTIN(updated.tin):null;
+  if(master)updated=applySupplierToTransaction(updated,master);
+  transactions[idx]=updated;
+  saveAll();
+  renderAll();
+  closeTinScanModal();
+  showToast(master?`TIN ${c.normalized} set and matched to Supplier Master.`:`TIN ${c.normalized} set. No Supplier Master match yet.`);
+}
+function handleTinScanClick(e){
+  if(e.target.id==='tinScanModal'||e.target.closest('[data-close-tin-scan]')){closeTinScanModal();return}
+  const btn=e.target.closest('[data-tin-index]');
+  if(btn){const i=Number(btn.getAttribute('data-tin-index'));if(Number.isInteger(i))confirmTinCandidate(i)}
 }
 function docStorageReady(){if(window.vatDocStorage&&window.vatDocStorage.ready())return true;showToast('Log in to the shared cloud before working with documents.');return false}
 function startDocUpload(txnId){
@@ -2978,6 +3162,7 @@ document.getElementById('cvReviewModal').addEventListener('click',e=>{if(e.targe
 document.getElementById('cvReviewModal').addEventListener('input',handleVerificationInput);
 document.getElementById('cvReviewModal').addEventListener('change',handleVerificationChange);
 document.getElementById('cvReviewModal').addEventListener('focusout',handleVerificationFocusOut);
+document.getElementById('tinScanModal').addEventListener('click',handleTinScanClick);
 const dz=document.getElementById('dropZone');dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');const f=e.dataTransfer.files[0];if(f){const inp=document.getElementById('xlsxInput');const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;handleXLSX({target:inp})}});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(activeSummaryReview){closeSummaryReviewModal();return}if(focusedCV){closeCVReviewModal();}}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){const tinModal=document.getElementById('tinScanModal');if(tinModal&&tinModal.classList.contains('visible')){closeTinScanModal();return}if(activeSummaryReview){closeSummaryReviewModal();return}if(focusedCV){closeCVReviewModal();}}});
 updateImportHelp();updateTaxPreview('f');renderAll();

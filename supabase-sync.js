@@ -900,19 +900,13 @@
     }
   }
 
+  // Public account creation is DISABLED. Accounts are provisioned by an administrator
+  // in Supabase, and "Allow new users to sign up" is turned off in Supabase Auth (the
+  // authoritative enforcement). This stub never calls auth.signUp() so the browser has
+  // no registration path; it is kept only to fail safe if any stale UI invokes it.
   async function signUp(){
-    try{
-      if(!supabaseClient){ setCloudStatus('Connecting to Supabase...','busy','Loading library'); if(initPromise){ try{ await initPromise; }catch(e){} } }
-      if(!supabaseClient){ setCloudStatus('Could not connect to Supabase. The Supabase library did not load \u2014 your network or host may be blocking the CDN. Open the browser Console for the exact error, or host supabase.min.js next to your files and set libUrl in supabase-config.js.','err','Library not loaded'); showErrorBox('The Supabase library did not load. Check the browser Console (likely a blocked CDN request or Content-Security-Policy).'); return; }
-      const email=getAuthEmail(), password=getAuthPassword();
-      if(!email||!password){ setCloudStatus('Type an email and password first.','warn','Missing login details'); return; }
-      setCloudStatus('Creating account...','busy','Sending signup request');
-      const { data, error } = await supabaseClient.auth.signUp({ email, password });
-      if(error) throw error;
-      cloudUser=data.session?.user||null;
-      if(cloudUser){ await afterLogin(); }
-      else { setAuthView(false); setCloudStatus('Account created. Confirm your email before logging in if confirmation is enabled.','warn','Waiting for email confirmation'); }
-    }catch(err){ console.error(err); setCloudStatus('Signup error: '+err.message,'warn','Account was not created'); showErrorBox('Signup error: '+err.message); }
+    setCloudStatus('Account creation is disabled. Contact your administrator for access.','warn','Sign-up disabled');
+    showErrorBox('Account creation is disabled. Accounts are provisioned by your administrator.');
   }
   async function logIn(){
     try{
@@ -1050,7 +1044,8 @@
   };
 
   /* ---------- exports ---------- */
-  window.signUp=signUp; window.logIn=logIn; window.logOut=logOut;
+  // window.signUp intentionally NOT exported — public account creation is disabled.
+  window.logIn=logIn; window.logOut=logOut;
   window.saveCloudData=saveCloudData; window.loadCloudData=loadCloudData; window.recoverPreviousData=recoverPreviousData;
   window.toggleCloudPopover=toggleCloudPopover; window.closeCloudPopover=closeCloudPopover; window.handleLoginKey=handleLoginKey;
   window.openAuditTrail=openAuditTrail; window.refreshAuditTrail=refreshAuditTrail; window.exportAuditTrail=exportAuditTrail; window.auditApplyFilters=renderAuditTable;
