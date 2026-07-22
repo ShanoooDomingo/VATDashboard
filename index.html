@@ -23,10 +23,9 @@
     <div class="login-field"><label>Password</label><input type="password" id="authPassword" autocomplete="current-password" placeholder="Password" onkeydown="handleLoginKey(event)"/></div>
     <div class="login-actions">
       <button class="btn btn-primary" type="button" onclick="logIn()">Log in</button>
-      <button class="btn" type="button" onclick="signUp()">Create account</button>
     </div>
     <div class="login-status busy" id="loginCloudStatus">Preparing secure login...</div>
-    <div class="login-help">If this is your first time, click <strong>Create account</strong>. If email confirmation is enabled in Supabase, confirm your email before logging in.</div>
+    <div class="login-help">Access is by invitation only. If you need an account, contact your administrator.</div>
   </div>
 </div>
 
@@ -102,6 +101,7 @@
 
   <section class="sheet" id="workingSheet">
     <div class="metrics" id="reconMetrics"></div>
+    <div class="metrics doc-tracker-metrics" id="docTrackerMetrics"></div>
     <div class="tax-breakdown-panel" id="purchaseTaxBreakdown"></div>
     <div class="controls"><div class="search-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="workSearch" placeholder="Search CV, voucher, supplier, TIN, invoice, or description..." oninput="renderAll()"/></div><select id="workStatus" onchange="renderAll()"><option value="">All verification statuses</option><option value="ok">Compliant</option><option value="warn">Without Invoice</option><option value="err">Non-Compliant</option><option value="unreviewed">Unreviewed</option></select><select id="varianceFilter" onchange="renderAll()"><option value="">All CVs</option><option value="vat">With VAT balance issue</option><option value="ewt">With EWT balance issue</option><option value="any">With any balance issue</option></select></div>
     <div class="legend purchase-info-wrap"><div class="leg"><div class="leg-dot" style="background:var(--accent)"></div>Purchase rows are grouped by CV Number</div><div class="leg"><div class="leg-dot" style="background:var(--err)"></div>VAT/EWT purchase amounts turn red when the CV is not balanced</div></div>
@@ -241,6 +241,12 @@
   </div>
 </div>
 <input type="file" id="docFileInput" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" multiple style="display:none" onchange="handleDocFileInput(event)"/>
+<div class="cv-review-modal tin-scan-modal" id="tinScanModal" aria-hidden="true">
+  <div class="cv-review-dialog tin-scan-dialog" role="dialog" aria-modal="true" aria-labelledby="tinScanTitle">
+    <div class="upload-summary-head"><h3 id="tinScanTitle">Scan for TIN</h3><button class="btn" type="button" data-close-tin-scan>Close</button></div>
+    <div id="tinScanBody"></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <div class="supabase-error-box" id="supabaseErrorBox"></div>
 <script src="app.js?v=10"></script>
