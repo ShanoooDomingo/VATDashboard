@@ -271,6 +271,10 @@
     return { changes, noops };
   }
 
+  // ponytail: the audit trail deliberately retains field-level old/new record values
+  // (including TINs and amounts) as an immutable change history, and best-effort client IP.
+  // This is by design for compliance traceability; it is not a leak, but access to the
+  // audit_log table must stay restricted (admin-only view; RLS at the database).
   function auditRow(c){
     return {
       user_id: cloudUser.id,
@@ -399,7 +403,9 @@
           continue;
         }
         let rows=(data||[]).map(r=>{
-          const rec=e.norm(r.data); rec._id=r.record_id;
+          // Use the cloud record_id as the local id ONLY if it is a clean token; a crafted
+          // record_id is neutralized (norm() already assigned a safe generated id).
+          const rec=e.norm(r.data); const rid=(typeof safeId==='function')?safeId(r.record_id):r.record_id; rec._id=rid||rec._id;
           lastModifiedMap[r.record_id]={ by:r.last_modified_by_name, at:r.last_modified_at };
           return rec;
         });
@@ -928,6 +934,11 @@
       stopBackgroundRefresh();
       if(supabaseClient) await supabaseClient.auth.signOut();
       cloudUser=null; myProfile=null; isAdmin=false; lastCloudSave=''; activeAuditView=false;
+      // Purge cached shared data + sync bookkeeping so a signed-out shared device retains
+      // nothing from the previous session (a fresh login re-pulls from the cloud).
+      try{ Object.keys(snapshots).forEach(k=>delete snapshots[k]); Object.keys(lastModifiedMap).forEach(k=>delete lastModifiedMap[k]); knownCloudIds={}; }catch(e){}
+      try{ localStorage.removeItem(KNOWN_IDS_KEY); }catch(e){}
+      try{ if(typeof clearLocalDashboardData==='function') clearLocalDashboardData(); }catch(e){}
       const p=byId('authPassword'); if(p) p.value='';
       syncAuditTabVisibility();
       closeCloudPopover(); setAuthView(false);
@@ -1022,7 +1033,7 @@
    * uploaded/fetched on demand. app.js calls this via window.vatDocStorage inside
    * click handlers only, so script load order does not matter. */
   const DOC_BUCKET=(CFG.storageBucket&&String(CFG.storageBucket).trim())||'invoice-documents';
-  const DOC_URL_TTL_SECONDS=300;
+  const DOC_URL_TTL_SECONDS=120; // short-lived signed URLs (private bucket; no public links)
   window.vatDocStorage={
     ready:()=>!!(supabaseClient&&cloudUser),
     user:()=>({ id:(cloudUser&&cloudUser.id)||'', name:currentUserName() }),

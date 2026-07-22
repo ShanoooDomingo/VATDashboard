@@ -3,14 +3,25 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<!-- Provably-safe CSP directives only (do not break Supabase realtime, CDN scripts, or
+     web-worker blobs used by pdf.js/tesseract). The full script-src/connect-src/worker-src
+     policy is meant to be enforced as a real HTTP header at the host — see README.
+     ponytail: script-src cannot drop 'unsafe-inline' until the remaining legacy inline
+     onclick handlers are migrated to event delegation. -->
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
 <title>Purchase Compliance Dashboard</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<script type="text/javascript" src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<!-- ponytail: third-party libraries are loaded from CDNs without Subresource Integrity.
+     Pin exact versions + add integrity="sha384-…" crossorigin, or self-host under /vendor,
+     to remove execution of unverified code. (Could not be done in this environment: no
+     outbound access to the CDNs to fetch files and compute hashes.) -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=11">
+<link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body class="auth-locked">
 
@@ -243,10 +254,10 @@
 <input type="file" id="docFileInput" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" multiple style="display:none" onchange="handleDocFileInput(event)"/>
 <div class="toast" id="toast"></div>
 <div class="supabase-error-box" id="supabaseErrorBox"></div>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 
-<script src="supabase-config.js?v=11"></script>
-<script src="supabase-sync.js?v=11"></script>
+<script src="supabase-config.js?v=12"></script>
+<script src="supabase-sync.js?v=12"></script>
 
 </body>
 </html>
